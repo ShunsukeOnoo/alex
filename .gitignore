@@ -1,0 +1,10 @@
+data/
+models/
+lib/
+MineDojo
+notebooks/
+make_env.sh
+requirements.txt
+requirements.lock
+requirements-dev.lock
+pyproject.toml

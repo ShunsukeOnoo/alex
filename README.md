@@ -29,7 +29,9 @@ In the training, I will train the model from YouTube videos (Figure). The ingred
 
 ![Figure](fig/model_overview.png)
 
-I hope the model learns the association of the transcripts and actions (Baker et al., 2022). 
+For the model architecture, for the moment I follow the common practice in multimodal LLM, composed of video encoder + Transformer language model. But in the future it will be an interesting theme to reconsider what is the best architecture for multimodal models.
+
+I hope the model learns the association of the transcripts and actions, which is a idea described in Baker et al. (2022).
  For example, the streamer will say "Let's get some wood", before actually going to cut some wood. 
  And in inference time, I hope the model will generate actions based on the text instructions.
 
@@ -73,7 +75,7 @@ I am a guy with a big dream and humble power, so I am looking for a collaborator
   - Research job in machine learning or neuroscience field,
   - Or whatever job with a good salary.
   
-If you are interested, please contact me via email () or my X account ().
+If you are interested, please contact me via email (shunsuke.ono.01@gmail.com) or [my X account](https://x.com/onoo999).
 
 
 ## Overview

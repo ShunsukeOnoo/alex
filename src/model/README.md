@@ -29,6 +29,14 @@ TODO
   - If inputs are only video frames, use default fps to create pseudo timestamps.
 
 
+### Unresolved
+Where is the best timing to apply the preprocessing?
+- At dataset: Use `transform` parameter of the dataset. It's simple but may not useful when we want to apply padding.
+- At dataloader: 
+- At batch
+
+
+
 
 ## AlexModel
 `modeling_alex.py` has two model classes.

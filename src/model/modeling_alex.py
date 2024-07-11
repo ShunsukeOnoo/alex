@@ -212,3 +212,32 @@ class AlexModel(AlexPreTrainedModel):
 
         # do some postprocessing
         pass
+
+
+def insert_video_embeddings(
+        text_embeddings: torch.Tensor,
+        video_embeddings: torch.Tensor,
+        video_frame_mask: torch.Tensor,
+):
+    """
+    Insert video embeddings into the text embeddings.
+    Note:
+        Each sequence may has different number of video frames.
+
+    Args:
+        text_embeddigs: Shape (batch_size, seq_len, emb_dim)
+        video_embeddings: Shape (batch_size, n_frames, emb_dim)
+        video_frame_mask: bool tensor with shape (batch_size, n_frames)
+
+    Returns:
+        torch.Tensor: Shape (batch_size, seq_len, emb_dim)
+    """
+    # TODO: Improve the efficiency
+    # Iterate over the batch
+    # Simple but not efficient
+    embeddings = torch.clone(text_embeddings)
+    for i in range(embeddings.size(0)):
+        n_frames = video_frame_mask[i].sum().item()
+        embeddings[i, video_frame_mask[i]] = video_embeddings[i, :n_frames]
+    
+    return embeddings

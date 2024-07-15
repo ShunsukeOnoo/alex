@@ -2,222 +2,255 @@
 Implementation of the Alex model.
 Somewhat I refer to the implementation of the Kosmos-2 model on HuggingFace.
 """
-from typing import Callable
+from typing import Dict, List, Optional, Tuple, Union
 import torch
 from torch import nn
 from torch.nn.modules.module import Module
 import transformers
+from transformers import PretrainedConfig, PreTrainedModel
+from transformers.utils import ModelOutput
 
 
-class AlexConfig(transformers.PretrainedConfig):
+class AlexConfig(PretrainedConfig):
     """
-    What I need to include:
-    - use_return_dict
-    """
-    pass
+    Configuration class to store the configuration of the Alex model.
 
+    Subconfigs
+        text_config
+        vision_config
+        vision_projection_config
 
-class AlexModelOutput(transformers.ModelOutput):
-    """
-    What I need to include:
-    - loss: (lm_loss, action_loss)?
-    - logits: (lm_logits, action_logits)?
-    - past_key_values
-    - hidden_states
-    - attentions
+    TODO: Implement this
     """
     pass
 
+class AlexTextConfig(PretrainedConfig):
+    pass
 
-class AlexPreTrainedModel(transformers.PreTrainedModel):
+class AlexVisionConfig(PretrainedConfig):
+    pass
+
+class AlexVisionProjectionConfig(PretrainedConfig):
+    pass
+
+
+class AlexModelOutput(ModelOutput):
+    """
+    What I need to include:
+        return AlexModelOutput(
+            loss=action_loss + lm_loss,
+            action_logits=action_logits,
+            lm_logits=lm_output.logits,
+            past_key_values=lm_output.past_key_values,
+            hidden_states=lm_output.hidden_states,
+            attentions=lm_output.attentions
+        )
+    """
+    loss: Optional[torch.Tensor] = None 
+    action_loss: Optional[torch.Tensor] = None
+    lm_loss: Optional[torch.Tensor] = None
+    action_logits: Optional[torch.Tensor] = None
+    lm_logits: Optional[torch.Tensor] = None
+    past_key_values: Optional[List[torch.FloatTensor]] = None
+    hidden_states: Optional[List[torch.FloatTensor]] = None
+    attentions: Optional[List[torch.FloatTensor]] = None
+
+
+class AlexPreTrainedModel(PreTrainedModel):
     """
     This is an abstract class that handles the loading of pretrained weights.
+    TODO: Implement this.
     """
     pass
 
 
-class AlexModel(AlexPreTrainedModel):
+class AlexTextModel(AlexPreTrainedModel):
     """
-    Alex model that plays Minecraft.
-
-    To do:
-    - implement the alignment of the video embeddings and the text embeddings
-    - implement the loss calculation
-    - implement the video embedding
-    - implement the generation
+    Base Alex model that handles the merging of the text and vision embeddings.
     """
-
     def __init__(self, config):
         self.config = config
-
-        # submodules
-        # token_embeddings must be consistent with the transformer
-        self.vision_encoder = ...
-        self.embed_tokens = ...   # text embeddings
-        self.embed_positions = ...    # positional embeddings
-        self.transformer = ...        # causal transformer language model without head
-        self.lm_head = ...
-        self.action_head = ...
-
+        self.transformer = ...
 
     def forward(
             self,
-            input_ids=None,
-            input_token_embeds=None,
-            video_frames=None,
-            token_timestamps=None,
-            video_indices=None,
-            video_embeds=None,
-            past_key_values=None,
-            lm_labels=None,
-            action_labels=None,
-            output_attentions=None,
-            return_dict=None            
-            ):
+            input_ids: torch.Tensor = None,
+            timestamps: torch.Tensor = None,
+            attention_mask: torch.Tensor = None,
+            video_embeds: torch.Tensor = None,
+            video_mask: torch.Tensor = None,
+            text_embeds: Optional[torch.Tensor] = None,
+            output_attentions: Optional[bool] = None,
+            output_hidden_states: Optional[bool] = None,
+    ):
+        # Embed text
+        if text_embeds is None:
+            text_embeds = self.embed_tokens(input_ids)
+
+        # Merge video embeddings with text embeddings
+        input_embeds = insert_video_embeddings(text_embeds, video_embeds, video_mask)
+
+        # Add positional embeddings
+        pos_embeds = embed_temporal_positions(timestamps)
+        input_embeds = input_embeds + pos_embeds
+
+        # Input embeddings to the transformer
+        return self.transformer(
+            input_embeds=input_embeds,
+            attention_mask=attention_mask,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states
+        )
+    
+
+class AlexVisionEncoder(AlexPreTrainedModel):
+    """
+    Embed video frames using a pretrained vision model.
+    """
+    def __init__(self, config: AlexVisionConfig):
+        super().__init__(config)
+        self.vision_model = ...
+    def forward(self, video_frames: torch.Tensor):
         """
-        Combine the video frames and the text tokens to generate the next action.
+        Args:
+            video_frames: Shape (batch_size, n_frames, height, width)
+        Returns:
+            torch.Tensor: Shape (batch_size, n_frames, n_seq, emb_dim)
+        """
+        # TODO: Implement this.
+        pass 
+
+
+class AlexVisionProjection(AlexPreTrainedModel):
+    def __init__(self, config: AlexVisionProjectionConfig):
+        super().__init__(config)
+        self.projection = ...
+    def forward(self, video_embeds):
+        """
+        Args:
+            video_embeds: Shape (batch_size, n_frames, n_seq, emb_dim)
+        Returns:
+            torch.Tensor: Shape (batch_size, n_frames, emb_dim)
+        """
+        return self.projection(video_embeds)
+
+
+class AlexForActionGeneration(AlexPreTrainedModel):
+    """
+    Alex model that predicts actions on the input video + text (optional).
+    """
+
+    def __init__(self, config: AlexConfig):
+        super().__init__(config)
+
+        self.lang_model = AlexTextModel(config.text_config)
+        self.vision_model = AlexVisionEncoder(config.vision_config)
+        self.image_projection = AlexVisionProjection(config.vision_projection_config)
+        self.action_head = nn.Linear(config.hidden_size, config.action_dim)
+        # TODO: We may want to apply a non-linear activation function here.
+
+        # TODO: Expand input embeddings to include video placeholders.
+
+    def forward(
+            self,
+            input_ids: torch.Tensor = None,
+            video_frames: torch.Tensor = None,
+            timestamps: torch.Tensor = None,
+            actions: Optional[torch.Tensor] = None,
+            action_target_mask: torch.Tensor = None,
+            text_target_mask: torch.Tensor = None,
+            video_frame_mask: torch.Tensor = None,
+            attention_mask: Optional[torch.Tensor] = None,
+            past_key_values: Optional[List[torch.FloatTensor]] = None,
+            labels: Optional[torch.Tensor] = None,
+            use_cache: Optional[bool] = None,
+            output_attentions: Optional[bool] = None,
+            output_hidden_states: Optional[bool] = None,
+            return_dict: Optional[bool] = None
+    ) -> Union[Tuple, AlexModelOutput]:
+        """
+        Forward pass of the model.
 
         Args:
-            input_ids (torch.Tensor): 
-                The input text tokens.
-            input_token_embeds (torch.Tensor):
-                The input text embeddings.
-            video_frames (torch.Tensor):
-                The input video frames.
-            video_embeds (torch.Tensor):
-                The input video embeddings.
-            past_key_values (tuple):
-                The past key values of the transformer.
-            lm_labels (torch.Tensor):
-                The language modeling labels.
-            action_labels (torch.Tensor):
-                The action labels.
-            output_attentions (bool):
-                Whether to output attentions.
-            return_dict (bool):
-                Whether to return a dictionary.
+            input_ids: Shape (batch_size, seq_len)
+            video_frames: Shape (batch_size, n_frames, height, width)
+            timestamps: Shape (batch_size, seq_len)
+            actions: Shape (batch_size, seq_len, action_dim). Target actions.
+            action_target_mask: Shape (batch_size, seq_len). Indicates the position of the action target.
+            text_target_mask: Shape (batch_size, seq_len). Indicates the position of the text target.
+            video_frame_mask: Shape (batch_size, n_frames). Indicates the position of the video frames in the sequence.
+                0 for non-video tokens, 1 for video tokens.
+            attention_mask: Shape (batch_size, seq_len). Indicates the position of the padding tokens.
+            past_key_values: List of torch.Tensor. Used for fast decoding.
+            labels: Shape (batch_size, seq_len). Target labels for text.
+            use_cache: bool. Used for fast decoding.
+            output_attentions: bool. Whether to output attentions.
+            output_hidden_states: bool. Whether to output hidden states.
+            return_dict: bool. Whether to return a dictionary.
         """
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        # Embed vision
+        video_embeds = self.vision_model(video_frames)
+        video_embeds = self.image_projection(video_embeds)
+        # Shape (batch_size, n_frames, emb_dim)
+        # TODO: Match the embedding size with the hidden size of the language model.
 
-        # embed video frames with vision model
-        if video_embeds is None:
-            video_embeds = self.embed_video_frames(video_frames)
-
-        # embed text tokens if provided
-        if input_token_embeds is None:
-            input_token_embeds = self.embed_tokens(input_ids)
-
-        # align the video embeddings with the text embeddings
-        input_embeds = self.align_embeddings(input_token_embeds, video_embeds)
-
-        # add positiional (temporal) embeddings to the both embeddings
-        input_embeds = input_embeds + self.embed_positions(input_embeds)
-
-        # pass the embeddings to the language model
-        outputs = self.transformer(
-            input_embeds=input_embeds,
+        # call the base model
+        lm_output = self.text_model(
+            input_ids=input_ids,
+            timestamps=timestamps,
+            attention_mask=attention_mask,
+            video_frame_mask=video_frame_mask,
+            video_embeds=video_embeds,
             past_key_values=past_key_values,
             output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
             return_dict=return_dict
         )
 
-        # apply the language head and action head
-        lm_logits = self.lm_head(outputs[0])
-        action_logits = self.action_head(outputs[0])
+        # Calculate the action logits
+        action_logits = self.action_head(lm_output.last_hidden_state)
+        # Retrieve the action logits for the target positions
+        # TODO: Review the dtype of action_target_mask
+        # TODO: Number of actions may vary for each sample.
+        action_logits = action_logits[action_target_mask]
+        # Shape (batch_size, seq_len?, action_dim)
 
-        # compute the action loss
-        lm_loss = self.calculate_lm_loss(lm_logits, lm_labels)
-        action_loss = self.calculate_action_loss(action_logits, action_labels)
+        # calculate the action loss
+        action_loss = ...
 
-        if not return_dict:
-            output = (lm_logits, action_logits) + outputs[1:]
-            return ((lm_loss, action_loss) + output) if lm_loss is not None else output
-        
+        # calculate the language model loss
+        lm_loss = ...
+
+        # return the output
         return AlexModelOutput(
-            loss=(lm_loss, action_loss),
-            logits=(lm_logits, action_logits),
-            past_key_values=outputs.past_key_values,
-            hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions
+            loss=action_loss + lm_loss,
+            action_loss = action_loss,
+            lm_loss = lm_loss,
+            action_logits=action_logits,
+            lm_logits=lm_output.logits,
+            past_key_values=lm_output.past_key_values,
+            hidden_states=lm_output.hidden_states,
+            attentions=lm_output.attentions
         )
 
-    def embed_video_frames(self, video_frames):
-        """
-        Embed the video frames with the vision encoder.
-        Note that the video frames are already preprocessed.
 
-        Args:
-            video_frames (torch.Tensor):
-                The video frames.
-        Returns:
-            video_embeds (torch.Tensor):
-                The video embeddings.
-        """
-        pass
+def embed_temporal_positions(timestamps: torch.Tensor):
+    """
+    Embed temporal positions using continuous timestamps.
 
-    def align_embeddings(self, input_embeds, video_embeds):
-        """
-        Align the video embeddings with the text embeddings and
-        return the interleaved embeddings.
-
-        Args:
-            input_embeds (torch.Tensor):
-                The text embeddings.
-            video_embeds (torch.Tensor):
-                The video embeddings.
-        Returns:
-            embeds (torch.Tensor):
-                The interleaved embeddings.
-        """
-        pass
-
-    def generate(self):
-        """
-        Generate text from interleaved vision + text
-        """
-        # we need to add GenerationMixIn to do this
-        pass
-
-    def play(self, env, instruction=None):
-        """
-        Play the game by iteratively running the model.
-
-        Args:
-            env (): The MineDojo environment.
-            instruction (str): The instruction to be executed.
-        """
-        # 
-        is_done = False
-        past_key_values = None
-
-        # if there is an instruction, we first run the model on instruction
-        # first, we need to tokenize the instruction 
-        # and add the special token <play> at the beginning (or end?)
-        out = ...
-        past_key_values = ...
-
-        while not is_done:
-            # get the current state (video frame) of the environment
-
-            # preprocess the video frame
-
-            # run the model on the video frame to get the next action
-            # (don't forget to pass the past_key_values)
-            action = ...
-
-            # take the action in the environment
-
-            # check if the game is done
-            is_done = ...
-
-        # do some postprocessing
-        pass
+    Args:
+        timestamps: Shape (batch_size, seq_len), elements shows the timestamps of the tokens.
+    Returns:
+        torch.Tensor: Shape (batch_size, seq_len, emb_dim)
+    """
+    # TODO: Implement this.
+    pass
 
 
 def insert_video_embeddings(
-        text_embeddings: torch.Tensor,
-        video_embeddings: torch.Tensor,
-        video_frame_mask: torch.Tensor,
+        text_embeds: torch.Tensor,
+        video_embeds: torch.Tensor,
+        video_mask: torch.Tensor,
 ):
     """
     Insert video embeddings into the text embeddings.
@@ -232,12 +265,11 @@ def insert_video_embeddings(
     Returns:
         torch.Tensor: Shape (batch_size, seq_len, emb_dim)
     """
-    # TODO: Improve the efficiency
-    # Iterate over the batch
-    # Simple but not efficient
-    embeddings = torch.clone(text_embeddings)
+    # TODO: Come up with a method without a loop.
+    # Iterate over the batch: not efficient
+    embeddings = torch.clone(text_embeds)
     for i in range(embeddings.size(0)):
-        n_frames = video_frame_mask[i].sum().item()
-        embeddings[i, video_frame_mask[i]] = video_embeddings[i, :n_frames]
+        n_frames = video_mask[i].sum().item()
+        embeddings[i, video_mask[i]] = video_embeds[i, :n_frames]
     
     return embeddings

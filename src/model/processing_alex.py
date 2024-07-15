@@ -100,8 +100,6 @@ class AlexProcessor:
         """
         Preprocess an input sample.
 
-        TODO: Input types are not consistent with the YouTubeDataset.
-
         TODO: Come up with more efficient way.
         TODO: Accept batch inputs.
 

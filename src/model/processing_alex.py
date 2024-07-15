@@ -49,7 +49,7 @@ class AlexProcessor:
             self, 
             video_frames: List[Image.Image], 
             frame_timestamps: List[float], 
-            actions: List[dict], 
+            actions: Dict[str, List[Union[int, List[float]]]],
             text: List[str], 
             text_timestamps: List[Tuple[float, float]]
             ):
@@ -68,36 +68,39 @@ class AlexProcessor:
             input_types.append('actions')
         
         if 'text' in input_types:
-            if text_timestamps is not None:
+            if text_timestamps is None:
+                text_timestamps = [(0, 0) for _ in text]
+            else:
                 assert len(text) == len(text_timestamps),\
                     "text and text_timestamps must have the same length."
-            else:
-                text_timestamps = [(0, 0) for _ in text]
+
         if 'video' in input_types:
             if frame_timestamps is not None:
                 assert len(video_frames) == len(frame_timestamps),\
                     "video_frames and frame_timestamps must have the same length."
+                if isinstance(frame_timestamps, list):
+                    frame_timestamps = np.array(frame_timestamps)
             else:
-                frame_timestamps = np.arange(0, len(video_frames), 1/self.default_fps).tolist()
+                frame_timestamps = np.arange(0, len(video_frames), 1/self.default_fps)
             
         # TODO: Check the format of actions
         if actions is not None:
-            assert isinstance(actions, list), "actions must be a list."
-            assert len(actions) == len(video_frames), \
-                f"actions must have the same length as video_frames but got {len(actions)} and {len(video_frames)}."
+            assert isinstance(actions, dict), "actions must be a list."
             
         return text_timestamps, frame_timestamps
     
     def __call__(
             self,
-            video_frames: List[Image.Image] = None,
-            frame_timestamps: List[float] = None,
+            video_frames: Union[torch.Tensor, List[Image.Image]] = None,
+            frame_timestamps: Union[np.ndarray, List[float]] = None,
             actions: List[dict] = None,
             text: List[str] = None,
-            text_timestamps: List[Tuple[float, float]] = None,
+            text_timestamps: Union[torch.Tensor, List[Tuple[float, float]]] = None,
         ):
         """
         Preprocess an input sample.
+
+        TODO: Input types are not consistent with the YouTubeDataset.
 
         TODO: Come up with more efficient way.
         TODO: Accept batch inputs.
@@ -123,7 +126,9 @@ class AlexProcessor:
             text: (optional) Transcripts of the video clip. List of strings, each represent a chunk of trunscript.
             text_timestamps: (optional) Tuple of start and end timestamps for each text chunk.
                 Must be the same length as the text.
-            video_frames: (optional) List of video frames in the video clip.
+            video_frames: (optional) Tensor that contains video frames in the clip with shape
+                (n_frames, num_channel, height, width) and range [0, 1].
+                Or, a list of video frames in the video clip.
             frame_timestamps: (optional) List of timestamps for the video frames.
                 Must be the same length as the video_frames.
             actions: (optional) Training targets. List of actions to be taken. Each action is a dictionary.
@@ -153,7 +158,7 @@ class AlexProcessor:
         text_timestamps, frame_timestamps = self.check_input(video_frames, frame_timestamps, actions, text, text_timestamps)
 
         # 1. Tokenize the input text and combine them with the video frame placeholders.
-        text_ids = self.tokenizer.encode(text)  # List[List[int]], 2d list (n_chunk, n_tokens_per_chunk)
+        text_ids = self.tokenizer(text, return_tensors=None)['input_ids']  # List[List[int]], 2d list (n_chunk, n_tokens_per_chunk)
         # Add timestamps for all text tokens
         text_timestamps = expand_text_timestamps(text_timestamps, text_ids)
         text_ids = sum(text_ids, [])  # List[int]
@@ -177,7 +182,7 @@ class AlexProcessor:
 
         # 4. Preprocess the actions.
         if actions is not None:
-            actions = action_dicts_to_tensor(actions)
+            actions = action_dict_to_tensor(actions)
 
         # 4. Return the results
         data = {
@@ -192,7 +197,7 @@ class AlexProcessor:
         }
         return data
     
-    def create_mask(self, input_ids: torch.Tensor, is_video: List[bool]):
+    def create_masks(self, input_ids: torch.Tensor, is_video: List[bool]):
         """
         Create masks for the input_ids.
 
@@ -233,13 +238,16 @@ class AlexProcessor:
         return self.tokenizer.decode(*args, **kwargs)
 
 
-def expand_text_timestamps(timestamps: List[Tuple[float, float]], text_ids: List[List[int]]) -> List[float]:
+def expand_text_timestamps(
+        timestamps: Union[torch.Tensor, List[Tuple[float, float]]],
+        text_ids: List[List[int]]) -> List[float]:
     """
     Expand the original text_timesmtamps, which only shows the start and end time of each text chunk,
     to the pseudo timestamps for each token.
 
     Args:
         timestamps: List of tuples of (start_time, end_time) for each text chunk.
+            Or a tensor with shape (n_chunks, 2).
         text_ids: List of text token ids for each text chunk.
 
     Returns:
@@ -248,10 +256,12 @@ def expand_text_timestamps(timestamps: List[Tuple[float, float]], text_ids: List
     assert len(timestamps) == len(text_ids), "timestamps and text_ids must have the same length."
     expanded_timestamps = []
 
-    for i, (start, end) in enumerate(timestamps):
+    for i in range(len(timestamps)):
         n_tokens = len(text_ids[i])
+        start = timestamps[i][0]
+        end = timestamps[i][1]
         chunk_timestamps = np.linspace(start, end, n_tokens)
-        expanded_timestamps.append(list(chunk_timestamps))
+        expanded_timestamps += list(chunk_timestamps)
 
     return expanded_timestamps
 
@@ -275,7 +285,7 @@ def combine_and_sort_ids(
     Returns:
         input_ids (torch.Tensor): Combined token ids.
         timestamps (torch.Tensor): Combined timestamps.
-        is_video (List[bol]): Indicates whether the token is a video frame or not.
+        is_video (List[bool]): Indicates whether the token is a video frame or not.
     """
     # List of tuple (id, timestamp, is_video)
     text_ids = [(text_ids[i], text_timestamps[i], False) for i in range(len(text_ids))]
@@ -285,21 +295,23 @@ def combine_and_sort_ids(
     text_ids.sort(key=lambda x: x[1])
     
     input_ids, timestamps, is_video = zip(*text_ids)
-    input_ids = torch.tensor(text_ids)
+    input_ids = torch.tensor(input_ids, dtype=torch.int64)
     timestamps = torch.tensor(timestamps)
     
-    return input_ids, timestamps, is_video
+    return input_ids, timestamps, list(is_video)
 
 
-# TODO: replace with the real action format
-ACTION_FORMAT = {
-    'jump': [0],
-    'left': [0],
-    'right': [0],
-}
-# TODO: Fill this according to hte IDM
-ACTION_KEYS = []
-ACTION_KEYS_MAP = {}  # maps action names to their idx in the tensor
+ACTION_KEYS = [
+    'attack', 'back', 'forward', 'jump', 'left', 'right', 'sneak', 'sprint', 'use', 
+    'drop', 'inventory', 'hotbar.1', 'hotbar.2', 'hotbar.3', 'hotbar.4', 'hotbar.5', 
+    'hotbar.6', 'hotbar.7', 'hotbar.8', 'hotbar.9', 'camera'
+]
+ACTION_KEYS_TENSOR = [
+    'attack', 'back', 'forward', 'jump', 'left', 'right', 'sneak', 'sprint', 'use', 
+    'drop', 'inventory', 'hotbar.1', 'hotbar.2', 'hotbar.3', 'hotbar.4', 'hotbar.5', 
+    'hotbar.6', 'hotbar.7', 'hotbar.8', 'hotbar.9', 'camera_0', 'camera_1'
+]
+
 
 def action_dict_to_tensor(action: Dict[str, Union[List[int], List[List[float]]]]):
     """
@@ -322,7 +334,8 @@ def action_dict_to_tensor(action: Dict[str, Union[List[int], List[List[float]]]]
             action_gathered.append(camera_1)
         else:
             action_gathered.append(action[key])
-    action_tensor = torch.tensor(action_gathered)
+    action_tensor = torch.tensor(action_gathered)  # (action_dim, n_frames)
+    action_tensor = action_tensor.transpose(0, 1)  # (n_frames, action_dim)
     return action_tensor
 
 
@@ -338,8 +351,8 @@ def action_tensor_to_dict(action: torch.Tensor):
         at each video frames.
     """
     action_dict = {}
-    for key, idx in ACTION_KEYS_MAP.items():
-        action_dict[key] = action[idx]
+    for idx, key in enumerate(ACTION_KEYS_TENSOR):
+        action_dict[key] = action[:, idx].tolist()
     # gather camera movements into a single list
     camera_0 = action_dict.pop('camera_0')
     camera_1 = action_dict.pop('camera_1')

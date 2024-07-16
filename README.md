@@ -70,12 +70,55 @@ TBA
 
 ## Looking for a Collaborator (or a Job)
 I am a guy with a big dream and humble power, so I am looking for a collaborator for this project or a job. Currently (20240-7-7), I am a Master's student at Kyoto University, and planning to graduate next spring (2025-3). 
-- If you are a collaborator, I expect you to have larger GPUs (mine are RX3060 & RTX1080) or higher skills.
+- If you are a collaborator, I expect you to have larger GPUs (mine are RX3060 & GTX1080) or higher skills.
 - If you offer me a job, I expect it to be either
   - Research job in machine learning or neuroscience field,
   - Or whatever job with a good salary.
   
 If you are interested, please contact me via email (shunsuke.ono.01@gmail.com) or [my X account](https://x.com/onoo999).
+
+
+## QA
+### Have you successfully played the game with the model?
+Answer: Not yet.
+
+### Do you have enough computational resources to train the model? 
+Answer: That is one of the biggest challenges for me. It is not impossible. Here's a rough estimation of the required memory size for a minimal model, using DeepSpeed and two GPUs.
+```
+import torch.nn as nn
+import open_clip
+from transformers import GPT2Model
+from deepspeed.runtime.zero.stage3 import estimate_zero3_model_states_mem_needs_all_live
+
+class VerySimpleModel(nn.Module):
+    def __init__(self, text_model, vision_model):
+        super().__init__()
+        self.text_model = text_model
+        self.vision_model = vision_model
+
+text_model = GPT2Model.from_pretrained('gpt2-medium)
+vision_model, _, preprocess = open_clip.create_model_and_transforms('ViT-B-32', pretrained='laion2b_s34b_b79k')
+vision_model = vision_model.visual
+
+simple_model = VerySimpleModel(text_model, vision_model)
+estimate_zero3_model_states_mem_needs_all_live(mymodel, num_gpus_per_node=2, num_nodes=1)
+```
+
+```
+Estimated memory needed for params, optim states and gradients for a:
+HW: Setup with 1 node, 2 GPUs per node.
+SW: Model with 442M total params, 51M largest layer params.
+  per CPU  |  per GPU |   Options
+   11.13GB |   0.19GB | offload_param=cpu , offload_optimizer=cpu , zero_init=1
+   11.13GB |   0.19GB | offload_param=cpu , offload_optimizer=cpu , zero_init=0
+    9.89GB |   0.60GB | offload_param=none, offload_optimizer=cpu , zero_init=1
+    9.89GB |   0.60GB | offload_param=none, offload_optimizer=cpu , zero_init=0
+    0.58GB |   3.90GB | offload_param=none, offload_optimizer=none, zero_init=1
+    4.95GB |   3.90GB | offload_param=none, offload_optimizer=none, zero_init=0
+```
+
+Since I have RX3060 & RTX1080, with more than 8GB RAM each, it is possible to at least train this model on my resources.
+But I would appreciate more resources if I have them.
 
 
 ## Overview

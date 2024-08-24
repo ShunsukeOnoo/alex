@@ -140,7 +140,7 @@ class AlexProcessor:
             video_frames (torch.Tensor): Preprocessed video frames. 
                 Shape (n_frames, num_channel, height, width).
             timestamp (torch.Tensor): Timestamp for each tokens. Shape (n_tokens,).
-            video_mask (torch.Tensor): Indicates a position in input_ids that corresponds
+            video_frame_mask (torch.Tensor): Indicates a position in input_ids that corresponds
                 to a video frame. Shape (n_tokens,). 0 for text tokens and 1 for video frames.
             actin_target_mask (torch.Tensor): Indicates the position that predicts the action.
                 Shape (n_tokens,). 1 for the position that predicts the action. 0 for the others.

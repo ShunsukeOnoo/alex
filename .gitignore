@@ -7,5 +7,4 @@ make_env.sh
 requirements.txt
 requirements.lock
 requirements-dev.lock
-pyproject.toml
 **/__pycache__/

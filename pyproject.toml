@@ -1,0 +1,31 @@
+[project]
+name = "alex"
+version = "0.1.0"
+description = "Add your description here"
+authors = [
+    { name = "ShunsukeOnoo", email = "shunsuke.ono.00@gmail.com" }
+]
+dependencies = [
+    "numpy>=1.26.4",
+    "torch>=2.3.0",
+    "pip>=24.0",
+    "transformers>=4.42.3",
+    "einops>=0.8.0",
+    "pillow>=10.4.0",
+]
+readme = "README.md"
+requires-python = ">= 3.11"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.rye]
+managed = true
+dev-dependencies = []
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/alex"]

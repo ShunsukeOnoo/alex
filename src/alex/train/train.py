@@ -27,45 +27,9 @@ import yaml
 import fire
 import torch
 import deepspeed
-from transformers import Trainer, TrainingArguments, CLIPVisionModel, AutoTokenizer
-from alex.model.modeling_alex_opt import AlexOPTForAction, AlexConfig, AlexVisionConfig
-from alex.model.processing_alex import AlexProcessor
+from transformers import TrainingArguments, Trainer
+from alex.model.factory import load_model_and_preprocessor
 from alex.dataset.dataset import YouTubeDataset
-
-
-def load_model_and_preprocessor(config: Dict[str, Any]):
-    pretrain_name = config['pretrain_name']
-    vision_pretrain_name = config['vision_pretrain_name']
-
-    # load preprocessor first
-    tokenizer = AutoTokenizer.from_pretrained(pretrain_name)
-    vision_processor = CLIPVisionProcessor.from_pretrained(vision_pretrain_name)
-    processor = AlexProcessor(
-        tokenizer=tokenizer, 
-        vision_processor=vision_processor,
-        **config['preprocessor']
-    )
-    
-    # prepare config for the model
-    vision_config = AlexVisionConfig.from_pretrained(vision_pretrain_name)
-
-    config = AlexConfig.from_pretrained(pretrain_name)
-    config.add_config(
-        vision_config=vision_config, 
-        # TODO: Processor does not have these attributes
-        frame_token_id=processor.frame_token_id,
-        frame_end_token_id=processor.frame_end_token_id,
-        **config['model']
-    )
-
-    # load model and its weights
-    model = AlexOPTForAction.from_pretrained(pretrain_name, config=config)
-    # This is double initialization but it is necessary to load the weights
-    model.vision_model.model = CLIPVisionModel.from_pretrained(vision_pretrain_name)
-
-    # Expand the embedding layer for the language model
-    model.resize_token_embeddings(len(processor.tokenizer))  # TODO: Is this correct?
-    return model, processor
 
 
 def main(config_path: str):

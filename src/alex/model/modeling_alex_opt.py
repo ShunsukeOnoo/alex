@@ -5,59 +5,98 @@ from typing import Dict, List, Optional, Tuple, Union
 import torch
 from torch import nn
 from einops import rearrange
-from transformers import PretrainedConfig
-from transformers.utils import logging, ModelOutput
-from transformers.modeling_outputs import BaseModelOutputWithPast
+from transformers import CLIPVisionModel, CLIPVisionConfig, PreTrainedModel
+from transformers.utils import logging
+from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
+from transformers.models.opt.configuration_opt import OPTConfig
 from transformers.models.opt.modeling_opt import OPTPreTrainedModel, OPTDecoder, OPTModel, OPTForCausalLM
-
 
 logger = logging.get_logger(__name__)
 
 
-class AlexConfig(PretrainedConfig):
+class AlexVisionConfig(CLIPVisionConfig):
     """
-    Configuration class to store the configuration of the Alex model.
+    Configuration class for the vision encoder module.
 
-    Subconfigs
-        text_config
-        vision_config
-        vision_projection_config
-
-    TODO: Implement this
+    Supopse using the pretrained configuration of CLIPVisionModel by using from_pretrained() method.
     """
-    pass
-
-class AlexTextConfig(PretrainedConfig):
-    pass
-
-class AlexVisionConfig(PretrainedConfig):
-    pass
-
-class AlexVisionProjectionConfig(PretrainedConfig):
-    pass
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
 
-class AlexModelOutput(ModelOutput):
+class AlexVisionProjectionConfig:
     """
-    What I need to include:
-        return AlexModelOutput(
-            loss=action_loss + lm_loss,
-            action_logits=action_logits,
-            lm_logits=lm_output.logits,
-            past_key_values=lm_output.past_key_values,
-            hidden_states=lm_output.hidden_states,
-            attentions=lm_output.attentions
-        )
+    Configuration class for the vision projection module.
+
+    Args:
+        projection_type (str): Type of the projection. Default is 'linear'.
+        input_dim (int): Dimension of the input embeddings of the projection module.
+            The input tensor will have the shape (batch_size, n_frames, tokens_per_frame, input_dim).
+        emb_dim (int): Dimension of the output embeddings. The output tensor will have the shape
+            (batch_size, n_frames, tokens_per_frame, emb_dim).
     """
-    loss: Optional[torch.Tensor] = None 
+    def __init__(self, projection_type: str, input_dim: int, emb_dim: int):
+        self.projection_type = projection_type
+        self.input_dim = input_dim
+        self.emb_dim = emb_dim
+
+
+class AlexConfig(OPTConfig):
+    """
+    Configuration class to store the configuration of the OPT based Alex model.
+
+    Args (unique to AlexConfig):
+
+    """
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    def add_config(
+            self, 
+            vision_config: AlexVisionConfig,
+            vision_projection_config: AlexVisionProjectionConfig,
+            frame_token_id: int,
+            frame_end_token_id: int,
+            action_dim: int = 22,  # TODO: Check this value
+            binary_action_dims: List[int] = None,
+            analogue_action_dims: List[int] = None,
+            timestamp_embedding: str = 'time2vec'
+            ) -> None:
+        """
+        Add configuration information for the Alex model.
+
+        Args:
+        vision_config (AlexVisionConfig): Configuration for the vision encoder module.
+        vision_projection_config (AlexVisionProjectionConfig): Configuration for the vision projection module.
+        frame_token_id (int): Token ID for the video frame embedding.
+        frame_end_token_id (int): Token ID for the end of the video frame embedding.
+        action_dim (int): Dimension of the action prediction.
+        binary_action_dims (List[int]): List of indices of the binary action dimensions.
+        analogue_action_dims (List[int]): List of indices of the analogue action dimensions.
+        timestamp_embedding (str): Type of the timestamp embedding. Default is 'time2vec'.  
+        """
+        self.vision_config = vision_config
+        self.vision_projection_config = vision_projection_config
+        self.frame_token_id = frame_token_id
+        self.frame_end_token_id = frame_end_token_id
+        self.action_dim = action_dim
+        self.binary_action_dims = binary_action_dims
+        self.analogue_action_dims = analogue_action_dims
+        self.timestamp_embedding = timestamp_embedding
+
+
+class AlexModelOutput(CausalLMOutputWithPast):
+    """
+    Output of the Alex model.
+    In addition to the original CausalLMOutputWithPast, it includes:
+    - action_loss: Loss of the action prediction.
+    - lm_loss
+    - action_logits: Logits of the action prediction.
+    """
     action_loss: Optional[torch.Tensor] = None
     lm_loss: Optional[torch.Tensor] = None
     action_logits: Optional[torch.Tensor] = None
-    lm_logits: Optional[torch.Tensor] = None
-    past_key_values: Optional[List[torch.FloatTensor]] = None
-    hidden_states: Optional[List[torch.FloatTensor]] = None
-    attentions: Optional[List[torch.FloatTensor]] = None
 
 
 class Time2Vec(nn.Module):
@@ -76,44 +115,87 @@ class Time2Vec(nn.Module):
         return torch.cat([v1, v2], -1)  # Shape: (batch_size, n_tokens, d_model)
     
 
-class AlexVisionEncoder(AlexPreTrainedModel):
+class AlexVisionEncoder(PreTrainedModel):
     """
-    Embed video frames using a pretrained vision model.
+    Embed video frames using vision model.
+    
+    Contents of the config:
+        (config for the model to be used)
+        use_last_projection (bool): Whether to use the last projection output of the model
     """
     def __init__(self, config: AlexVisionConfig):
         super().__init__(config)
-        self.vision_model = ...
+        self.config = config
+        # Instantiate the vision model without loading weights
+        self.model = CLIPVisionModel.from_config(config)
+
     def forward(self, video_frames: torch.Tensor):
         """
         Args:
-            video_frames: Shape (batch_size, n_frames, height, width)
+            video_frames: Shape (batch_size, n_frames, channel, height, width). 
+                Preprocessed video frames. May contain padding frames whose values are zeros.
         Returns:
-            torch.Tensor: Shape (batch_size, n_frames, n_seq, emb_dim)
+            torch.Tensor: Shape (batch_size, n_frames, tokens_per_frame, hidden_size).
         """
-        # TODO: Implement this.
-        pass 
+        # Turn the input shape into (batch_size * n_frames, channel, height, width)
+        batch_size, n_frames, channel, height, width = video_frames.size()
+        video_frames = video_frames.flatten(0, 1)
+
+        # Use the model to produce the embeddings
+        out = self.model(pixel_values=video_frames, return_dict=True)
+
+        # Based on the config, return what is needed.
+        if self.config.use_last_projection:
+            vision_embeds = out.pooler_output  # (batch_size * n_frames, hidden_size)
+            return vision_embeds.view(batch_size, n_frames, -1).unsqueeze(2)  # (batch_size, n_frames, 1, hidden_size)
+        else:
+            vision_embeds = out.last_hidden_state # (batch_size * n_frames, *, hidden_size)
+            _, n_embeds, hidden_size = vision_embeds.size()
+            return vision_embeds.view(batch_size, n_frames, n_embeds, hidden_size)  # (batch_size, n_frames, *, hidden_size)
 
 
-class AlexVisionProjection(AlexPreTrainedModel):
+class AlexVisionProjection(PreTrainedModel):
+    """
+    Turn the output of the vision encoder into the input of the language model.
+    TODO: Implement more sophisticated projection methods in the future.
+
+    Config:
+        projection_type (str): Type of the projection. Default is 'linear'.
+        input_dim (int): Dimension of the input embeddings.
+        emb_dim (int): Dimension of the output embeddings.
+    """
     def __init__(self, config: AlexVisionProjectionConfig):
         super().__init__(config)
-        self.projection = ...
+        self.config = config
+
+        if config.projection_type.lower() == 'linear':
+            self.projection = nn.Linear(config.input_dim, config.emb_dim)
+
+        elif config.projection_type.lower() == 'resampler':
+            raise NotImplementedError("Resampler is not implemented yet.")
+        
+        else:
+            raise ValueError(f"Unknown projection type: {config.projection_type}")
+
     def forward(self, video_embeds):
         """
         Args:
-            video_embeds: Shape (batch_size, n_frames, n_seq, emb_dim)
+            video_embeds: Shape (batch_size, n_frames, tokens_per_frame, input_dim)
         Returns:
-            torch.Tensor: Shape (batch_size, n_frames, emb_dim)
+            torch.Tensor: Shape (batch_size, n_frames, tokens_per_frame, emb_dim)
         """
         return self.projection(video_embeds)
     
 
 class AlexOPTDecoder(OPTDecoder):
+    """
+    Base decoder transformer for the Alex model.
+    Wraps the OPTDecoder and add unique timestamp embeddings.
+    """
     def __init__(self, config: AlexConfig):
         super().__init__(config)
 
         if config.timestamp_embedding.lower() == 'time2vec':
-            # TODO: Check the dimension of the timestamp embedding.
             self.embed_timestamp = Time2Vec(config.hidden_size)
         else:
             raise ValueError(f"Unknown timestamp embedding: {config.timestamp_embedding}")
@@ -326,9 +408,21 @@ class AlexOPTModel(OPTModel, OPTPreTrainedModel):
 
 class AlexOPTForAction(OPTForCausalLM, OPTPreTrainedModel):
     """
-    Alex model that predicts actions on the input video + text (optional).
-    """
+    Alex model that predicts actions on the input video + text sequence.
 
+
+    Args:
+        config (AlexConfig): Configuration class for the model, which includes the following parameters.
+            vocab_size: int Number of tokens in the vocabulary including the frame tokens.
+            vision_config
+            vision_projection_config
+            action_dim
+            binary_action_dims: List of int. Dimension of the analogue actions.
+            analogue_action_dims: List of int. Dimension of the binary actions.
+            timestamp_embedding: str. Type of the timestamp embedding.
+            frame_token_id (int): Token ID for the video frame embedding.
+            frame_end_token_id (int): Token ID for the end of the video frame embedding.
+    """
     def __init__(self, config: AlexConfig):
         super(OPTPreTrainedModel, self).__init__(config)
         # Original modules for the OPT model
@@ -337,131 +431,123 @@ class AlexOPTForAction(OPTForCausalLM, OPTPreTrainedModel):
 
         # Additional modules for the Alex model
         self.vision_model = AlexVisionEncoder(config.vision_config)
-        self.image_projection = AlexVisionProjection(config.vision_projection_config)
+        self.vision_projection = AlexVisionProjection(config.vision_projection_config)
         self.action_head = nn.Linear(config.hidden_size, config.action_dim, bias=False)
-        # TODO: We may want to apply a non-linear activation function after action_head.
-        # TODO: Expand input embeddings of the language model to include video placeholders.
-        # TODO: the output dim of the vision_projection should be the same as the hidden_size of the language model.
+        self.action_activation = nn.Sigmoid()  # For the action head activation
+        
+        self.binary_action_dims = config.binary_action_dims
+        self.analogue_action_dims = config.analogue_action_dims
+        self.binary_action_loss = nn.CrossEntropyLoss()
+        self.analogue_action_loss = nn.MSELoss()
+        # TODO: When should we expand input embeddings of the language model to include video placeholders?
 
     def forward(
             self,
             input_ids: torch.Tensor = None,
             video_frames: torch.Tensor = None,
             timestamps: torch.Tensor = None,
-            actions: Optional[torch.Tensor] = None,
-            action_target_mask: torch.Tensor = None,
-            text_target_mask: torch.Tensor = None,
-            video_frame_mask: torch.Tensor = None,
-            video_emb_mask: torch.Tensor = None,
             attention_mask: Optional[torch.Tensor] = None,
             past_key_values: Optional[List[torch.FloatTensor]] = None,
+            actions: Optional[torch.Tensor] = None,
             labels: Optional[torch.Tensor] = None,
             use_cache: Optional[bool] = None,
             output_attentions: Optional[bool] = None,
             output_hidden_states: Optional[bool] = None,
             return_dict: Optional[bool] = None
     ) -> Union[Tuple, AlexModelOutput]:
-        """
-        Forward pass of the model.
+        """Forward pass of the model.
+    
+        Note that n_tokens and n_frames are different. n_token is the number of text tokens and video frames in the sequence.
 
         Args:
-            input_ids: Shape (batch_size, seq_len)
-            # TODO: Each sample may contains different number of video frames...
-            # TODO: The tensor may contains padding values at the end.
-            video_frames: Shape (batch_size, n_frames, height, width)
-            timestamps: Shape (batch_size, seq_len)
-            actions: Shape (batch_size, seq_len, action_dim). Target actions.
-            action_target_mask: Shape (batch_size, seq_len). Indicates the position of the action target.
-            text_target_mask: Shape (batch_size, seq_len). Indicates the position of the text target.
-            # TODO: The video embeddings may span multiple tokens.
-            video_frame_mask: Shape (batch_size, seq_len). Indicates the position of the video frames in the sequence.
-                0 for non-video tokens, 1 for video tokens.
-            video_emb_mask: Shape (batch_size, n_frames). Indicates the position of the video embeddings 
-                in video_frames.
-            attention_mask: Shape (batch_size, seq_len). Indicates the position of the padding tokens.
+            input_ids: Shape (batch_size, n_tokens). Input tokens which include video placeholders.
+            video_frames: Shape (batch_size, n_frames, height, width). Preprocessed video frames. May contain padding frames 
+                whose values are zeros.
+            timestamps: Shape (batch_size, n_tokens). Timestamps of the tokens.
+            attention_mask: Shape (batch_size, n_tokens). 2D attention mask which indicates the position of the padding tokens.
             past_key_values: List of torch.Tensor. Used for fast decoding.
-            labels: Shape (batch_size, seq_len). Target labels for text.
+            actions: Shape (batch_size, n_tokens, action_dim). Target actions.
+            labels: Shape (batch_size, n_tokens). Target labels for text.
             use_cache: bool. Used for fast decoding.
             output_attentions: bool. Whether to output attentions.
             output_hidden_states: bool. Whether to output hidden states.
             return_dict: bool. Whether to return a dictionary.
         """
-        # Embed inputs
+        # Embed video frames
         video_embeds = self.vision_model(video_frames)
-        video_embeds = self.image_projection(video_embeds)
-        # TODO: Check the embedding size of the language model.
-        # Shape (batch_size, n_frames, emb_dim), where emb_dim corresponds to
-        # the embedding size of the language model.
+        video_embeds = self.vision_projection(video_embeds)
+        # (batch_size, n_frames, tokens_per_frame, emb_dim): 
+
+        # Embed text tokens
         text_embeds = self.model.decoder.embed_tokens(input_ids)
 
         # Combine the vision and text embeddings
-        input_embeds = insert_video_embeddings(text_embeds, video_embeds, video_frame_mask, video_emb_mask)
+        frame_emb_mask = input_ids == self.config.frame_token_id
+        input_embeds = combine_embeddings(text_embeds, video_embeds, frame_emb_mask)
+        # (batch_size, n_tokens, emb_dim)
 
         # Call the base Transformer model
-        # TODO: Check the parameters
-        outputs = self.model.decoder(
-            input_embeds=input_embeds,
-            attention_mask=attention_mask,
+        outputs = self.model.forward(
             timestamps=timestamps,
-            past_key_values=past_key_values,
+            attention_mask=attention_mask,
+            input_embeds=input_embeds,
+            use_cache=use_cache,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
-            return_dict=True
+            past_key_values=past_key_values,
+            return_dict=return_dict
         )
+        # outputs[0]: (batch_size, n_tokens, hidden_size)
+        
+        # Predict next tokens
+        lm_logits = self.lm_head(outputs[0]).contiguous()        # (batch_size, n_tokens, vocab_size)
 
-        # Apply lm_head and action_head
-        lm_logits = self.lm_head(outputs[0]).contiguous()        # (batch_size, seq_len, vocab_size)
-        action_logits = self.action_head(outputs[0]).contiguous() # (batch_size, seq_len, action_dim)
+        # Predict actions
+        action_logits = self.action_head(outputs[0]).contiguous() # (batch_size, n_tokens, action_dim)
+        action_logits[:, :, self.binary_action_dims] = self.action_activation(
+            action_logits[:, :, self.binary_action_dims])
 
-        # calculate losses
-        oveall_loss = None
+        # Calculate loss
+        loss = None
         if actions is not None:
-            # TODO: Reconsider the dtype of action_target_mask
-            action_loss = calculate_action_loss(action_logits, actions, action_target_mask)
-            overall_loss = action_loss
+            # check the location of the action predictions: they are end of each video frame
+            action_target_mask = input_ids == self.config.frame_end_token_id
+            action_loss = calculate_action_loss(
+                action_logits, actions, action_target_mask, self.binary_action_dims, self.analogue_action_dims,
+                self.binary_action_loss, self.analogue_action_loss)
+            loss = action_loss
         else:
             action_loss = None
         if labels is not None:
+            # check the location of the text token predictions
+            # they are tokens whose next token is not a video frame token
+            text_target_mask = attention_mask * (input_ids != self.config.frame_token_id) * (input_ids != self.config.frame_end_token_id)
+            text_target_mask = torch.roll(text_target_mask, 1, dims=-1)
+            text_target_mask[:, -1] = False
             lm_loss = calculate_lm_loss(lm_logits, labels, text_target_mask)
-            overall_loss = lm_loss if overall_loss is None else overall_loss + lm_loss
+            loss = lm_loss if loss is None else loss + lm_loss
         else:
             lm_loss = None
 
         # return the output
-        if return_dict:
-            return AlexModelOutput(
-                loss=overall_loss,
-                action_loss = action_loss,
-                lm_loss = lm_loss,
-                action_logits=action_logits,
-                lm_logits=lm_logits,
-                past_key_values=outputs.past_key_values,
-                hidden_states=outputs.hidden_states,
-                attentions=outputs.attentions
-            )
-        else:
-            # TODO: Implement this.
-            pass
+        if not return_dict:
+            return (loss, action_loss, lm_loss, action_logits, lm_logits) + outputs[1:]
+        return AlexModelOutput(
+            loss=loss,
+            action_loss = action_loss,
+            lm_loss = lm_loss,
+            action_logits=action_logits,
+            logits=lm_logits,
+            past_key_values=outputs.past_key_values,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions
+        )
+            
 
-
-def embed_temporal_positions(timestamps: torch.Tensor):
-    """
-    Embed temporal positions using continuous timestamps.
-
-    Args:
-        timestamps: Shape (batch_size, seq_len), elements shows the timestamps of the tokens.
-    Returns:
-        torch.Tensor: Shape (batch_size, seq_len, emb_dim)
-    """
-    # TODO: Implement this.
-    pass
-
-
-def insert_video_embeddings(
+def combine_embeddings(
         text_embeds: torch.Tensor,
         video_embeds: torch.Tensor,
-        video_frame_mask: torch.Tensor,
-        video_emb_mask: torch.Tensor = None
+        frame_emb_mask: torch.Tensor,
 ):
     """
     Insert video embeddings into the text embeddings.
@@ -469,48 +555,47 @@ def insert_video_embeddings(
         Each sequence may has different number of video frames.
 
     Args:
-        text_embeddigs: Shape (batch_size, seq_len, emb_dim)
-        video_embeddings: Shape (batch_size, n_frames, emb_dim)
-        video_frame_mask: bool tensor with shape (batch_size, seq_len)
-        video_emb_mask: bool tensor with shape (batch_size, n_frames)
+        text_embeddigs: Shape (batch_size, n_tokens, emb_dim)
+        video_embeddings: Shape (batch_size, n_frames, token_per_frame, emb_dim)
+        frame_emb_mask: Bool tensor with shape (batch_size, n_tokens). Indicates the position of the frame embeddings in the sequence.
 
     Returns:
-        torch.Tensor: Shape (batch_size, seq_len, emb_dim)
+        torch.Tensor: Shape (batch_size, n_tokens, emb_dim)
     """
-    # TODO: consider better names for video_frame_mask, because it's rather a mask for input_ids.
-    if not video_emb_mask:
-        b, f, e = video_embeds.size()
-        video_emb_mask = torch.zeros((b, f), dtype=torch.bool, device=video_embeds.device)
-        for i in range(b):
-            n_frames = video_frame_mask[i].sum().item()
-            video_emb_mask[i, :n_frames] = True
-        # video_emb_mask: (batch_size, n_frames)
-
-    text_embeds[video_frame_mask] = video_embeds[video_emb_mask]
+    # TODO: Find more efficient implementation
+    batch_size = text_embeds.size(0)
+    n_frame_tokens = frame_emb_mask.sum(dim=1)  # (batch_size)
+    for i in range(batch_size):
+        text_embeds[i, frame_emb_mask[i]] = video_embeds[i, :n_frame_tokens[i]].flatten(0, 1)
     return text_embeds
 
 
-def calculate_action_loss(action_logits, action_targets, action_target_mask):
+def calculate_action_loss(action_logits, action_targets, action_target_mask, binary_action_dims, analogue_action_dims,
+                        binary_loss, analogue_loss):
     """
     Calculate the action loss.
 
     Args:
-        action_logits: Shape (batch_size, seq_len, action_dim)
-        action_targets: Shape (batch_size, seq_len, action_dim)
-        action_target_mask: Shape (batch_size, seq_len)
+        action_logits: Shape (batch_size, n_tokens, action_dim)
+        action_targets: Shape (batch_size, n_frames, action_dim)
+        action_target_mask: Shape (batch_size, n_tokens)
     """
-    # flatten batch dimension
-    action_logits = rearrange(action_logits, 'b s a -> (b s) a')
-    action_targets = rearrange(action_targets, 'b s a -> (b s) a')
-    action_target_mask = rearrange(action_target_mask, 'b s -> (b s)')
-
-    # retrieve the target actions
-    action_logits = action_logits[action_target_mask]
-    action_targets = action_targets[action_target_mask]
-    
-    # TODO: Use sophisticated loss function. For some actions, we may want to use MSE loss.
-    loss_func = nn.CrossEntropyLoss()
-    return loss_func(action_logits, action_targets)
+    # Calculate the loss for each sample
+    # because the number of frames is different for each sample.
+    # TODO: More efficient implementation
+    loss = 0
+    batch_size, n_tokens, action_dim = action_logits.size()
+    for i in range(batch_size):
+        n_frames = action_target_mask[i].sum().item()
+        loss += binary_loss(
+            action_logits[i, action_target_mask[i]][:, binary_action_dims], 
+            action_targets[i, :n_frames]
+        )
+        loss += analogue_loss(
+            action_logits[i, action_target_mask[i]][:, analogue_action_dims], 
+            action_targets[i, :n_frames]
+        )
+    return loss
 
 
 def calculate_lm_loss(lm_logits, labels, text_target_mask):

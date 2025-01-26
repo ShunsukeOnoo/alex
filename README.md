@@ -155,3 +155,42 @@ action = processor.postprocess_action(pred.logits)  # to a format compatible wit
 ```
  
 For details, please take a look at `src/model/README.md`.
+
+
+### Modeling
+
+What is needed to completet the modeling?
+- Add information to the AlexConfig
+  - number of added new tokens (from AlexProcessor?)
+  - vision_config
+  - vision_projection_config
+  - action_dim
+- Implement vision encoder
+- Implement vision projection
+- Padding function to pad input video sequences with differnet length (maybe in the preprocessing.py?)
+
+Issues
+- How to initialize the weights of vision_model and image_projection?
+- How to generalize the implementation to the other base models?
+
+
+## Memo
+
+Contents of the AlexConfig
+(original?)
+- word_embed_proj_dim
+- vocab_size
+hidden_size
+
+(additional)
+- vision_config
+  - (config of the model)
+  - use_last_projection
+- vision_projection_config
+  - projection_type = 'linear'
+  - input_dim
+  - emb_dim  # TODO: Redundant
+- action_dim
+- binary_action_dims
+- analogue_action_dims
+- timestamp_embedding = 'time2vec'

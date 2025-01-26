@@ -12,6 +12,8 @@ dependencies = [
     "transformers>=4.42.3",
     "einops>=0.8.0",
     "pillow>=10.4.0",
+    "deepspeed>=0.15.0",
+    "open-clip-torch>=2.29.0",
 ]
 readme = "README.md"
 requires-python = ">= 3.11"

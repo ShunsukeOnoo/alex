@@ -47,9 +47,15 @@ class AlexProcessor:
         # Add special tokens
         self.num_new_tokens = tokenizer.add_special_tokens({'additional_special_tokens': [frame_start_token, frame_token, frame_end_token]})
         
+        # token for a single embedding
+        self.frame_token_id = tokenizer.convert_tokens_to_ids(frame_token)
+        
+        # last token for a single frame
+        self.frame_end_token_id = tokenizer.convert_tokens_to_ids(frame_end_token)
+
+        # all tokens for a single frame
         self.frame_tokens = frame_start_token + frame_token * frame_emb_len + frame_end_token
-        self.frame_token_ids = tokenizer.encode(self.frame_token_str)
-        self.frame_last_emb_id = tokenizer.convert_tokens_to_ids(frame_end_token)
+        self.frame_token_ids = tokenizer.encode(self.frame_tokens)
         
         self.frame_emb_len = frame_emb_len
         self.frame_token_len = len(self.frame_token_ids)  # length of total special tokens per frame TODO: Name is confusing.
@@ -95,6 +101,25 @@ class AlexProcessor:
             assert isinstance(actions, dict), "actions must be a list."
             
         return text_timestamps, frame_timestamps
+    
+    def collate_fn(
+            self,
+            batch
+    ):
+        """
+        Collate function for transformers Trainer class.
+        Apply preprocessing and padding to the input samples.
+
+        Args:
+            batch: List of samples to collate.
+        """
+        return self.__call__(
+            video_frames=[sample['video_frames'] for sample in batch],
+            frame_timestamps=[sample['frame_timestamps'] for sample in batch],
+            text=[sample['text'] for sample in batch],
+            text_timestamps=[sample['text_timestamps'] for sample in batch],
+            actions=[sample['actions'] for sample in batch],
+        )
     
     def __call__(
             self,

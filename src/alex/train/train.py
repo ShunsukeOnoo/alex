@@ -18,7 +18,15 @@ Config:
 
     wandb (dict): Arguments for the Weights and Biases.
 
-
+    
+TODO: 
+- Check processor compatibility with the dataset (data type and format)
+- Add them to processor config and use config values if not provided
+  - padding
+  - padding_side
+  - max_length
+- Add LoRA
+- Assign learning rate for each modules
 """
 from typing import Any, Dict, List, Tuple, Union
 import os
@@ -32,32 +40,36 @@ from alex.model.factory import load_model_and_preprocessor
 from alex.dataset.dataset import YouTubeDataset
 
 
+def set_trainable_parameters(model, freeze_vision: bool):
+    """
+    Set trainable parameters for the model.
+
+    Args:
+        model: The model to set trainable parameters.
+        freeze_vision (bool): Whether to freeze the vision model.
+    """
+    if freeze_vision:
+        for param in model.vision_model.parameters():
+            param.requires_grad = False
+
+
 def main(config_path: str):
-    # load config
     with open(config_path) as f:
         config = yaml.safe_load(f)
 
     deepspeed.init_distributed()
 
-    # TODO: Check processor compatibility with the dataset
-    # TODO: Where should we perform preprocessing and padding? on dataset or on collate_fn?
     model, processor = load_model_and_preprocessor(config)
     dataset = YouTubeDataset(transform=processor, **config['dataset'])
 
-    # TODO: Add LoRA
-    # TODO: set trainable parameters
-    # TODO: Set learning rate for each module
-    model.train()
-
-    # Set wandb project and name
-
-
+    set_trainable_parameters(model, config['freeze_vision'])    
     trainer = Trainer(
         model=model, train_dataset=dataset,
         args=TrainingArguments(**config["training"]),
+        collate_fn=processor.collate_fn
     )
 
-    with torch.autocast("cuda"):
+    with torch.autocast("cuda"):  # TODO: Is this autocast necessary?
         result = trainer.train()
 
     save_path = os.path.join(config['training']['output_dir'], 'final_ckeckpoint')

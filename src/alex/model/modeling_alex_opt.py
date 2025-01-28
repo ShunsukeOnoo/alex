@@ -410,7 +410,6 @@ class AlexOPTForAction(OPTForCausalLM, OPTPreTrainedModel):
     """
     Alex model that predicts actions on the input video + text sequence.
 
-
     Args:
         config (AlexConfig): Configuration class for the model, which includes the following parameters.
             vocab_size: int Number of tokens in the vocabulary including the frame tokens.

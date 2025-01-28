@@ -15,6 +15,7 @@ dependencies = [
     "deepspeed>=0.15.0",
     "open-clip-torch>=2.29.0",
     "fire>=0.7.0",
+    "wandb>=0.19.4",
 ]
 readme = "README.md"
 requires-python = ">= 3.11"

@@ -14,15 +14,14 @@ training:
   output_dir: ./output/
   report_to: "wandb"
 
-pretrain_name:
-vision_pretrain_name: 
+pretrain_name: facebook/opt-125m
+vision_pretrain_name: openai/clip-vit-base-patch32
 model:
   binary_action_dims: 
   analogue_action_dims:
 
 preprocessor:
   frame_emb_len: 1
-
 
 dataset:
   dataset_index_path:

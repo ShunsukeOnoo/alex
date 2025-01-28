@@ -3,9 +3,7 @@ Instantiate the model.
 """
 from typing import Any, Dict, List, Tuple, Union
 
-import torch
-
-from transformers import CLIPVisionModel, AutoTokenizer, CLIPProcessor
+from transformers import CLIPVisionModel, AutoTokenizer, CLIPImageProcessor
 from .modeling_alex_opt import AlexOPTForAction, AlexConfig, AlexVisionConfig
 from .processing_alex import AlexProcessor
 
@@ -15,15 +13,17 @@ def load_model_and_preprocessor(config: Dict[str, Any]):
     Load model and preprocessor from the config.
 
     Contents of the config:
-    
+        - pretrain_name: The name of the pre-trained model for the langauge model.
+        - vision_pretrain_name: The name of the pre-trained model for the vision model.
+        - preprocessor: The configuration for the preprocessor.
+        - model: The configuration for the model.
     """
     pretrain_name = config['pretrain_name']
     vision_pretrain_name = config['vision_pretrain_name']
 
     # load preprocessor first
     tokenizer = AutoTokenizer.from_pretrained(pretrain_name)
-    # TODO: This is not the vision processor
-    vision_processor = CLIPProcessor.from_pretrained(vision_pretrain_name)
+    vision_processor = CLIPImageProcessor.from_pretrained(vision_pretrain_name)
     processor = AlexProcessor(
         tokenizer=tokenizer, 
         vision_processor=vision_processor,
@@ -35,8 +35,7 @@ def load_model_and_preprocessor(config: Dict[str, Any]):
 
     config = AlexConfig.from_pretrained(pretrain_name)
     config.add_config(
-        vision_config=vision_config, 
-        # TODO: Add processor these attributes
+        vision_config=vision_config,
         frame_token_id=processor.frame_token_id,
         frame_end_token_id=processor.frame_end_token_id,
         **config['model']
@@ -49,5 +48,5 @@ def load_model_and_preprocessor(config: Dict[str, Any]):
     model.vision_model.model = CLIPVisionModel.from_pretrained(vision_pretrain_name)
 
     # Expand the embedding layer for the language model
-    model.resize_token_embeddings(len(processor.tokenizer))  # TODO: Is this correct?
+    model.resize_token_embeddings(len(processor.tokenizer))
     return model, processor

@@ -10,7 +10,7 @@ from .processing_alex import AlexProcessor
 
 def load_model_and_preprocessor(config: Dict[str, Any]):
     """
-    Load model and preprocessor from the config.
+    Load model and preprocessor from the config for training the model.
 
     Contents of the config:
         - pretrain_name: The name of the pre-trained model for the langauge model.

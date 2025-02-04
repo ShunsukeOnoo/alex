@@ -68,11 +68,9 @@ def main(config_path: str):
         args=TrainingArguments(**config["training"]),
         collate_fn=processor.collate_fn
     )
+    result = trainer.train()
 
-    with torch.autocast("cuda"):  # TODO: Is this autocast necessary?
-        result = trainer.train()
-
-    save_path = os.path.join(config['training']['output_dir'], 'final_ckeckpoint')
+    save_path = os.path.join(config['training']['output_dir'], 'final_checkpoint')
     trainer.save_model(save_path)
 
 if __name__ == "__main__":

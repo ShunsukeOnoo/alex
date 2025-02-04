@@ -71,7 +71,8 @@ class YouTubeDataset(Dataset):
         # obtain the video frames
         video_path = os.path.join(self.video_dir, video_id + self.video_suffix)
         cap = cv2.VideoCapture(video_path)
-        assert cap.isOpened(), f'Failed to open the video file: {video_path}'
+        if not cap.isOpened():
+            raise RuntimeError(f"Failed to open the video file: {video_path}")
         frames, frame_timestamps = extract_video_frames(cap, start_idx, end_idx)
         cap.release()
 
@@ -151,15 +152,11 @@ def extract_transcripts(transcript_file: List[dict], start_time: float, end_time
         timestamps (torch.Tensor): the start time and end time of each transcript.
             Shape (n_transcripts, 2)
     """
-    # TODO: We may reconsider the filtering of the transcripts
-    # Right now, we are filtering the transcripts based on the start time
-    extracted = [
-        t for t in transcript_file if t['start'] >= start_time and t['start'] < end_time
-    ]
+    # extract the transcripts within the given time range
+    extracted = [t for t in transcript_file if t['start'] >= start_time and t['start'] + t['duration'] <= end_time]
+
     transcripts = [t['text'] for t in extracted]
-    timestamps = [
-        (t['start'], t['start'] + t['duration']) for t in extracted
-    ]
+    timestamps = [(t['start'], t['start'] + t['duration']) for t in extracted]
 
     # turn the timestamps into a tensor and into a relative timestamp
     timestamps = torch.tensor(timestamps)

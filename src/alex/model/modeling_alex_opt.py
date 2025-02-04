@@ -19,7 +19,7 @@ class AlexVisionConfig(CLIPVisionConfig):
     """
     Configuration class for the vision encoder module.
 
-    Supopse using the pretrained configuration of CLIPVisionModel by using from_pretrained() method.
+    Suppose using the pretrained configuration of CLIPVisionModel by using from_pretrained() method.
     """
     def __init__(self, **kwargs):
         super().__init__(**kwargs)

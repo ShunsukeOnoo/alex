@@ -17,17 +17,24 @@ training:
 pretrain_name: facebook/opt-125m
 vision_pretrain_name: openai/clip-vit-base-patch32
 model:
-  binary_action_dims: 
-  analogue_action_dims:
+  binary_action_dims:  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+  analogue_action_dims: [20, 21]  # camera_0, camera_1
+
+
+vision_projection:
+  projection_type: 'linear'
+  input_dim: 512
+  emb_dim: 768
 
 preprocessor:
   frame_emb_len: 1
 
 dataset:
-  dataset_index_path:
-  action_dir:
-  video_dir:
-  transcripts_dir:
+  dataset_index_path: data/dataset/tutorial_filtered_xs_v0/dataset.json
+  action_dir: data/dataset/tutorial_filtered_xs_v0/idm_actions
+  video_dir: data/youtube_videos/tutorial_filtered_xs_v0
+  transcripts_dir: data/youtube_transcrips/tutorial_filtered_s_v0
+
 
 wandb:
   project: "AlexOPT"

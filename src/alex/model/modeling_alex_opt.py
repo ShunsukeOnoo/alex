@@ -1,12 +1,13 @@
 """
 Implementation of the Alex model based on OPT model.
 """
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Union
 import torch
 from torch import nn
 from einops import rearrange
-from transformers import CLIPVisionModel, CLIPVisionConfig, PreTrainedModel
-from transformers.utils import logging
+from transformers import CLIPVisionModel, CLIPVisionConfig, PreTrainedModel, PretrainedConfig
+from transformers.utils import logging, ModelOutput
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
 from transformers.models.opt.configuration_opt import OPTConfig
@@ -25,7 +26,7 @@ class AlexVisionConfig(CLIPVisionConfig):
         super().__init__(**kwargs)
 
 
-class AlexVisionProjectionConfig:
+class AlexVisionProjectionConfig(PretrainedConfig):
     """
     Configuration class for the vision projection module.
 
@@ -56,7 +57,7 @@ class AlexConfig(OPTConfig):
             self, 
             vision_config: AlexVisionConfig,
             vision_projection_config: AlexVisionProjectionConfig,
-            frame_token_id: int,
+            frame_emb_token_id: int,
             frame_end_token_id: int,
             action_dim: int = 22,  # TODO: Check this value
             binary_action_dims: List[int] = None,
@@ -69,7 +70,7 @@ class AlexConfig(OPTConfig):
         Args:
         vision_config (AlexVisionConfig): Configuration for the vision encoder module.
         vision_projection_config (AlexVisionProjectionConfig): Configuration for the vision projection module.
-        frame_token_id (int): Token ID for the video frame embedding.
+        frame_emb_token_id (int): Token ID for the video frame embedding.
         frame_end_token_id (int): Token ID for the end of the video frame embedding.
         action_dim (int): Dimension of the action prediction.
         binary_action_dims (List[int]): List of indices of the binary action dimensions.
@@ -78,7 +79,7 @@ class AlexConfig(OPTConfig):
         """
         self.vision_config = vision_config
         self.vision_projection_config = vision_projection_config
-        self.frame_token_id = frame_token_id
+        self.frame_emb_token_id = frame_emb_token_id
         self.frame_end_token_id = frame_end_token_id
         self.action_dim = action_dim
         self.binary_action_dims = binary_action_dims
@@ -86,7 +87,8 @@ class AlexConfig(OPTConfig):
         self.timestamp_embedding = timestamp_embedding
 
 
-class AlexModelOutput(CausalLMOutputWithPast):
+@dataclass
+class AlexModelOutput(ModelOutput):
     """
     Output of the Alex model.
     In addition to the original CausalLMOutputWithPast, it includes:
@@ -94,6 +96,14 @@ class AlexModelOutput(CausalLMOutputWithPast):
     - lm_loss
     - action_logits: Logits of the action prediction.
     """
+    # from CausalLMOutputWithPast
+    loss: Optional[torch.FloatTensor] = None
+    logits: torch.FloatTensor = None
+    past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None
+    hidden_states: Optional[Tuple[torch.FloatTensor, ...]] = None
+    attentions: Optional[Tuple[torch.FloatTensor, ...]] = None
+
+    # Additional outputs
     action_loss: Optional[torch.Tensor] = None
     lm_loss: Optional[torch.Tensor] = None
     action_logits: Optional[torch.Tensor] = None
@@ -127,7 +137,7 @@ class AlexVisionEncoder(PreTrainedModel):
         super().__init__(config)
         self.config = config
         # Instantiate the vision model without loading weights
-        self.model = CLIPVisionModel.from_config(config)
+        self.model = CLIPVisionModel(config)
 
     def forward(self, video_frames: torch.Tensor):
         """
@@ -405,6 +415,29 @@ class AlexOPTModel(OPTModel, OPTPreTrainedModel):
         self.decoder = AlexOPTDecoder(config)
         self.post_init()
 
+    def forward(
+            self,
+            timestamps,
+            attention_mask,
+            inputs_embeds,
+            use_cache,
+            output_attentions,
+            output_hidden_states,
+            past_key_values,
+            return_dict,
+        ):
+        decoder_outputs = self.decoder(
+            timestamps=timestamps,
+            attention_mask=attention_mask,
+            inputs_embeds=inputs_embeds,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            past_key_values=past_key_values,
+            return_dict=return_dict
+        )
+        return decoder_outputs
+
 
 class AlexOPTForAction(OPTForCausalLM, OPTPreTrainedModel):
     """
@@ -419,7 +452,7 @@ class AlexOPTForAction(OPTForCausalLM, OPTPreTrainedModel):
             binary_action_dims: List of int. Dimension of the analogue actions.
             analogue_action_dims: List of int. Dimension of the binary actions.
             timestamp_embedding: str. Type of the timestamp embedding.
-            frame_token_id (int): Token ID for the video frame embedding.
+            frame_emb_token_id (int): Token ID for the video frame embedding.
             frame_end_token_id (int): Token ID for the end of the video frame embedding.
     """
     def __init__(self, config: AlexConfig):
@@ -432,13 +465,11 @@ class AlexOPTForAction(OPTForCausalLM, OPTPreTrainedModel):
         self.vision_model = AlexVisionEncoder(config.vision_config)
         self.vision_projection = AlexVisionProjection(config.vision_projection_config)
         self.action_head = nn.Linear(config.hidden_size, config.action_dim, bias=False)
-        self.action_activation = nn.Sigmoid()  # For the action head activation
         
         self.binary_action_dims = config.binary_action_dims
         self.analogue_action_dims = config.analogue_action_dims
-        self.binary_action_loss = nn.CrossEntropyLoss()
+        self.binary_action_loss = nn.BCEWithLogitsLoss()
         self.analogue_action_loss = nn.MSELoss()
-        # TODO: When should we expand input embeddings of the language model to include video placeholders?
 
     def forward(
             self,
@@ -481,15 +512,15 @@ class AlexOPTForAction(OPTForCausalLM, OPTPreTrainedModel):
         text_embeds = self.model.decoder.embed_tokens(input_ids)
 
         # Combine the vision and text embeddings
-        frame_emb_mask = input_ids == self.config.frame_token_id
-        input_embeds = combine_embeddings(text_embeds, video_embeds, frame_emb_mask)
+        frame_emb_mask = input_ids == self.config.frame_emb_token_id
+        inputs_embeds = combine_embeddings(text_embeds, video_embeds, frame_emb_mask)
         # (batch_size, n_tokens, emb_dim)
 
         # Call the base Transformer model
         outputs = self.model.forward(
             timestamps=timestamps,
             attention_mask=attention_mask,
-            input_embeds=input_embeds,
+            inputs_embeds=inputs_embeds,
             use_cache=use_cache,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
@@ -503,8 +534,6 @@ class AlexOPTForAction(OPTForCausalLM, OPTPreTrainedModel):
 
         # Predict actions
         action_logits = self.action_head(outputs[0]).contiguous() # (batch_size, n_tokens, action_dim)
-        action_logits[:, :, self.binary_action_dims] = self.action_activation(
-            action_logits[:, :, self.binary_action_dims])
 
         # Calculate loss
         loss = None
@@ -520,7 +549,7 @@ class AlexOPTForAction(OPTForCausalLM, OPTPreTrainedModel):
         if labels is not None:
             # check the location of the text token predictions
             # they are tokens whose next token is not a video frame token
-            text_target_mask = attention_mask * (input_ids != self.config.frame_token_id) * (input_ids != self.config.frame_end_token_id)
+            text_target_mask = attention_mask * (input_ids != self.config.frame_emb_token_id) * (input_ids != self.config.frame_end_token_id)
             text_target_mask = torch.roll(text_target_mask, 1, dims=-1)
             text_target_mask[:, -1] = False
             lm_loss = calculate_lm_loss(lm_logits, labels, text_target_mask)
@@ -584,15 +613,21 @@ def calculate_action_loss(action_logits, action_targets, action_target_mask, bin
     # TODO: More efficient implementation
     loss = 0
     batch_size, n_tokens, action_dim = action_logits.size()
+
+    # the number of actions for each sample is different
+    # that is why we need to calculate the loss for each sample
+    # TODO: can we calculate the loss for all samples at once and 
+    # then mask out and take the mean?
+
     for i in range(batch_size):
         n_frames = action_target_mask[i].sum().item()
         loss += binary_loss(
-            action_logits[i, action_target_mask[i]][:, binary_action_dims], 
-            action_targets[i, :n_frames]
+            action_logits[i, action_target_mask[i]][:, binary_action_dims],   # (n_frames, n_binary_actions)
+            action_targets[i, :n_frames, binary_action_dims]                # (n_frames, n_binary_actions)
         )
         loss += analogue_loss(
-            action_logits[i, action_target_mask[i]][:, analogue_action_dims], 
-            action_targets[i, :n_frames]
+            action_logits[i, action_target_mask[i]][:, analogue_action_dims],  # (n_frames, n_analogue_actions)
+            action_targets[i, :n_frames, analogue_action_dims]
         )
     return loss
 

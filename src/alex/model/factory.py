@@ -2,9 +2,9 @@
 Instantiate the model.
 """
 from typing import Any, Dict, List, Tuple, Union
-
-from transformers import CLIPVisionModel, AutoTokenizer, CLIPImageProcessor
-from .modeling_alex_opt import AlexOPTForAction, AlexConfig, AlexVisionConfig
+from torchvision import transforms
+from transformers import CLIPVisionModel, AutoTokenizer
+from .modeling_alex_opt import AlexOPTForAction, AlexConfig, AlexVisionConfig, AlexVisionProjectionConfig
 from .processing_alex import AlexProcessor
 
 
@@ -23,7 +23,11 @@ def load_model_and_preprocessor(config: Dict[str, Any]):
 
     # load preprocessor first
     tokenizer = AutoTokenizer.from_pretrained(pretrain_name)
-    vision_processor = CLIPImageProcessor.from_pretrained(vision_pretrain_name)
+    # TODO: These values only work for CLIP. Make it more general
+    vision_processor = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.Normalize(mean=[0.48145466, 0.4578275, 0.40821073], std=[0.26862954, 0.26130258, 0.27577711]),
+    ])
     processor = AlexProcessor(
         tokenizer=tokenizer, 
         vision_processor=vision_processor,
@@ -32,12 +36,14 @@ def load_model_and_preprocessor(config: Dict[str, Any]):
     
     # prepare config for the model
     vision_config = AlexVisionConfig.from_pretrained(vision_pretrain_name)
+    vision_projection_config = AlexVisionProjectionConfig(**config['vision_projection'])
 
-    config = AlexConfig.from_pretrained(pretrain_name)
-    config.add_config(
+    alex_config = AlexConfig.from_pretrained(pretrain_name)
+    alex_config.add_config(
         vision_config=vision_config,
         frame_token_id=processor.frame_token_id,
         frame_end_token_id=processor.frame_end_token_id,
+        vision_projection_config=vision_projection_config,
         **config['model']
     )
 

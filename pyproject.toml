@@ -16,6 +16,10 @@ dependencies = [
     "open-clip-torch>=2.29.0",
     "fire>=0.7.0",
     "wandb>=0.19.4",
+    "matplotlib>=3.10.0",
+    "ipykernel>=6.29.5",
+    "opencv-python>=4.11.0.86",
+    "pandas>=2.2.3",
 ]
 readme = "README.md"
 requires-python = ">= 3.11"

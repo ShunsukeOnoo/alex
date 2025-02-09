@@ -1,3 +1,11 @@
+"""
+Preprocessing module for the Alex model.
+
+TODO
+- Consider making a class for action.
+
+"""
+
 from typing import List, Optional, Tuple, Union, Dict, Any, Callable
 import numpy as np
 from PIL import Image
@@ -11,12 +19,26 @@ from transformers import PreTrainedTokenizer
 class AlexProcessor:
     """Processor for the Alex model.
 
+    There are three special tokens:
+    - frame_start_token: Shows the start of the video frames.
+    - frame_emb_token: Placeholder for the video embeddings.
+    - frame_end_token: Shows the end of the video frames.
+    The variable '..._token' indicates the token string, and '..._token_id' indicates the tokenized id (int).
+
+    frame_tokens: The string that represents a single frame. It is a concatenation of the three special tokens.
+    - frame_tokens = frame_start_token + frame_emb_token * frame_emb_len + frame_end_token
+    - frame_token_ids: Tokenized ids for the frame_tokens.
+    - frame_token_len: Length of the frame_tokens.
+
+
     Args:
         tokenizer (PreTrainedTokenizer): Tokenizer for the language model.
         image_processor (callable, optional): Image processor for the video frames.
+
         frame_start_token (str): Start token for the video frames.
-        frame_token (str): Placeholder for the video embeddings.
+        frame_emb_token (str): Placeholder for the video embeddings.
         frame_end_token (str): End token for the video frames.
+        
         frame_emb_len (int): Length of the frame embeddings.
             The overall placeholder for a single frame will be frame_token * (frame_emb_len - 1) + frame_end_token.
         default_fps (int): Default frame per second for the video clips. Used when frame_timestamps is not provided.
@@ -25,7 +47,7 @@ class AlexProcessor:
                  tokenizer: PreTrainedTokenizer, 
                  image_processor: Optional[Callable] = None,
                  frame_start_token: str = "<frame/>",
-                 frame_token: str = "<frame>", 
+                 frame_emb_token: str = "<frame>", 
                  frame_end_token: str = "</frame>",
                  frame_emb_len: int = 1,
                  default_fps: int = 30
@@ -33,75 +55,33 @@ class AlexProcessor:
         self.tokenizer = tokenizer
         self.image_processor = image_processor
         self.frame_start_token = frame_start_token
-        self.frame_token = frame_token
+        self.frame_token = frame_emb_token
         self.frame_end_token = frame_end_token
+        self.frame_emb_len = frame_emb_len
         self.default_fps = default_fps
 
         # id: int, token: str
         self.pad_token_id = tokenizer.pad_token_id
 
-        assert frame_token != '', "frame_token must not be an empty string."
+        assert frame_emb_token != '', "frame_token must not be an empty string."
         assert frame_end_token != '', "frame_end_token must not be an empty string."
         assert frame_emb_len > 0, "frame_emb_len must be a positive integer."
 
         # Add special tokens
-        self.num_new_tokens = tokenizer.add_special_tokens({'additional_special_tokens': [frame_start_token, frame_token, frame_end_token]})
+        self.num_new_tokens = tokenizer.add_special_tokens({'additional_special_tokens': [frame_start_token, frame_emb_token, frame_end_token]})
         
         # token for a single embedding
-        self.frame_token_id = tokenizer.convert_tokens_to_ids(frame_token)
+        self.frame_emb_token_id = tokenizer.convert_tokens_to_ids(frame_emb_token)
         
         # last token for a single frame
         self.frame_end_token_id = tokenizer.convert_tokens_to_ids(frame_end_token)
 
-        # all tokens for a single frame
-        self.frame_tokens = frame_start_token + frame_token * frame_emb_len + frame_end_token
-        self.frame_token_ids = tokenizer.encode(self.frame_tokens)
-        
-        self.frame_emb_len = frame_emb_len
+        # all tokens that represent a single frame
+        self.frame_tokens = frame_start_token + frame_emb_token * frame_emb_len + frame_end_token
+        self.frame_token_ids = tokenizer.encode(self.frame_tokens, add_special_tokens=False)  # List[int]
         self.frame_token_len = len(self.frame_token_ids)  # length of total special tokens per frame TODO: Name is confusing.
-
-    def check_input(
-            self, 
-            video_frames: List[Image.Image], 
-            frame_timestamps: List[float], 
-            actions: Dict[str, List[Union[int, List[float]]]],
-            text: List[str], 
-            text_timestamps: List[Tuple[float, float]]
-            ):
-        """Check if the input is valid, and create psuedo timestamps if needed.
-        TODO: Reconsider this
-        """
-        input_types = []
-        if text is not None:
-            input_types.append('text')
-        if video_frames is not None:
-            input_types.append('video')
-        if len(input_types) == 0:
-            raise ValueError("Either text or video_frames must be provided.")
-        if actions is not None:
-            input_types.append('actions')
         
-        if 'text' in input_types:
-            if text_timestamps is None:
-                text_timestamps = [(0, 0) for _ in text]
-            else:
-                assert len(text) == len(text_timestamps),\
-                    "text and text_timestamps must have the same length."
 
-        if 'video' in input_types:
-            if frame_timestamps is not None:
-                assert len(video_frames) == len(frame_timestamps),\
-                    "video_frames and frame_timestamps must have the same length."
-                if isinstance(frame_timestamps, list):
-                    frame_timestamps = np.array(frame_timestamps)
-            else:
-                frame_timestamps = np.arange(0, len(video_frames), 1/self.default_fps)
-            
-        if actions is not None:
-            assert isinstance(actions, dict), "actions must be a list."
-            
-        return text_timestamps, frame_timestamps
-    
     def collate_fn(
             self,
             batch
@@ -123,7 +103,7 @@ class AlexProcessor:
     
     def __call__(
             self,
-            video_frames: List[List[Image.Image]],
+            video_frames: Union[List[torch.Tensor], torch.Tensor],
             frame_timestamps: List[List[float]],
             text: List[List[str]],
             text_timestamps: List[List[Tuple[float, float]]],
@@ -133,11 +113,13 @@ class AlexProcessor:
             max_length: Optional[int] = None
         ):
         """
-        Process input samples and make a batch.
+        Process input samples and make a batch. 
+
+        TODO: this method is not compatible with a single input sample.
 
         Args:
-            video_frames (List[List[Image.Image]]): List of video frames.
-                Each element is a list of video frames in a video clip.
+            video_frames (List[torch.Tensor]): List of video frames for each video clip.
+                Each element is video frames in a video clip with shape (n_frames, num_channel, height, width).
             frame_timestamps (List[List[float]]): List of timestamps for each video frame.
                 Each element is a list of timestamps for each video clip.
             text (List[List[str]]): List of transcripts of the video clips.
@@ -156,17 +138,30 @@ class AlexProcessor:
         Returns:
 
         """
-        # Process each sample
-        processed = [
-            self._process_sample(
-                video_frames=video_frames[i],
-                frame_timestamps=frame_timestamps[i],
-                text=text[i],
-                text_timestamps=text_timestamps[i],
-                actions=actions[i] if actions is not None else None
+        # check if inputs are batched or a single sample
+        if isinstance(video_frames, torch.Tensor) and video_frames.dim() == 4:
+            # a single sample
+            processed = self.process_sample(
+                video_frames=video_frames,
+                frame_timestamps=frame_timestamps,
+                text=text,
+                text_timestamps=text_timestamps,
+                actions=actions
             )
-            for i in range(len(video_frames))
-        ]
+            processed = [processed]
+
+        else:
+            # Process each sample
+            processed = [
+                self.process_sample(
+                    video_frames=video_frames[i],
+                    frame_timestamps=frame_timestamps[i],
+                    text=text[i],
+                    text_timestamps=text_timestamps[i],
+                    actions=actions[i] if actions is not None else None
+                )
+                for i in range(len(video_frames))
+            ]
 
         # stack all items into a list
         input_ids = [data['input_ids'] for data in processed]    # List[List[int]]
@@ -179,14 +174,14 @@ class AlexProcessor:
             # pad input_ids and timestamps: note input_ids and timestamps from a same sample have same length
             max_input_len = max(len(ids) for ids in input_ids)
             pad_length = max_length if max_length is not None else max_input_len
-            input_ids, attention_mask = self._pad(input_ids, pad_length, padding_side=padding_side, pad_value=self.pad_token_id, return_attention_mask=True)
-            timestamps = self._pad(timestamps, pad_length, pad_value=0, padding_side=padding_side)
+            input_ids, attention_mask = self.pad(input_ids, pad_length, padding_side=padding_side, pad_value=self.pad_token_id, return_attention_mask=True)
+            timestamps = self.pad(timestamps, pad_length, pad_value=0, padding_side=padding_side)
 
             # pad video_frames and actions
             max_frame_len = max(vf.size(0) for vf in video_frames)
-            video_frames = self._pad(video_frames, max_frame_len, pad_value=0, padding_side=padding_side)
+            video_frames = self.pad(video_frames, max_frame_len, pad_value=0, padding_side=padding_side)
             if actions is not None:
-                actions = self._pad(actions, max_frame_len, pad_value=0, padding_side=padding_side)
+                actions = self.pad(actions, max_frame_len, pad_value=0, padding_side=padding_side)
 
         # stack all items into tensors
         batch = {
@@ -199,7 +194,7 @@ class AlexProcessor:
             batch['actions'] = torch.stack(actions)
         return batch
     
-    def _pad(
+    def pad(
             self,
             sequences: Union[List[List[Any]], List[torch.Tensor]],
             pad_length: int,
@@ -257,9 +252,9 @@ class AlexProcessor:
         else:
             return sequences
 
-    def _process_sample(
+    def process_sample(
             self,
-            video_frames: List[Image.Image],
+            video_frames: torch.Tensor,
             frame_timestamps: List[float],
             text: List[str],
             text_timestamps: List[Tuple[float, float]],
@@ -272,7 +267,7 @@ class AlexProcessor:
 
 
         Args:
-            video_frames (List[Image.Image]): List of video frames in the video clip.
+            video_frames (torch.Tensor): Video frames for the video clip with shape (n_frame, num_channel, height, width).
             frame_timestamps: (List[float]) List of timestamps for each video frame.
             text (List[str]): Transcripts of the video clip. List of strings, each represent a chunk of trunscript.
             text_timestamps (List[Tuple[float, float]]): Timestamps for each text chunk. List of tuples of start and end timestamps.
@@ -286,10 +281,14 @@ class AlexProcessor:
                 actions (torch.Tensor): (Optional) Preprocessed actions that corresponds to
                     each video frames. Shape (n_frames, action_dim).
         """
-        #text_timestamps, frame_timestamps = self.check_input(video_frames, frame_timestamps, actions, text, text_timestamps)
+        # preprocess the video frames
+        assert video_frames.dim() == 4, f"video_frames must have 4 dimensions, but got {video_frames.dim()}."
+        video_frames = self.image_processor(video_frames)
 
         # Tokenize the input text and combine them with the video frame placeholders.
-        text_ids = self.tokenizer(text, return_tensors=None)['input_ids']  # 2D list (n_chunk, n_tokens_per_chunk)
+        text_ids = self.tokenizer(text, return_tensors=None, add_special_tokens=False)['input_ids']  
+        # 2D list (n_chunk, n_tokens_per_chunk)
+        
         # Add timestamps for all text tokens
         text_timestamps = expand_text_timestamps(text_timestamps, text_ids)
         text_ids = sum(text_ids, [])  # List[int]
@@ -298,16 +297,16 @@ class AlexProcessor:
         n_frames = len(video_frames)
         frame_ids = self.frame_token_ids * n_frames  # List[int], shape (n_tokens_per_frame * n_frames,)
         frame_timestamps = np.repeat(frame_timestamps, self.frame_token_len).tolist()  # List[float], shape (n_tokens_per_frame * n_frames,)
-        
+
         # Combine and sort them according to their timestamps.
         frame_id_timestamps = list(zip(frame_ids, frame_timestamps))
         text_id_timestamps = list(zip(text_ids, text_timestamps))
         all_id_timestamps = frame_id_timestamps + text_id_timestamps
         all_id_timestamps = sorted(all_id_timestamps, key=lambda x: x[1])
-        input_ids, timestamps = zip(*all_id_timestamps)
 
-        # Preprocess the video frames if needed.
-        video_frames = self.image_processor(video_frames)
+        input_ids, timestamps = zip(*all_id_timestamps)
+        input_ids = list(input_ids)
+        timestamps = list(timestamps)
 
         # Preprocess the actions.
         if actions is not None:

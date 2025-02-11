@@ -6,9 +6,9 @@ from typing import Dict, List, Optional, Tuple, Union
 import torch
 from torch import nn
 from einops import rearrange
-from transformers import CLIPVisionModel, CLIPVisionConfig, PreTrainedModel, PretrainedConfig
+from transformers import CLIPVisionModel, CLIPVisionConfig, PreTrainedModel, PretrainedConfig, AutoConfig
 from transformers.utils import logging, ModelOutput
-from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
+from transformers.modeling_outputs import BaseModelOutputWithPast
 from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
 from transformers.models.opt.configuration_opt import OPTConfig
 from transformers.models.opt.modeling_opt import OPTPreTrainedModel, OPTDecoder, OPTModel, OPTForCausalLM
@@ -22,8 +22,21 @@ class AlexVisionConfig(CLIPVisionConfig):
 
     Suppose using the pretrained configuration of CLIPVisionModel by using from_pretrained() method.
     """
-    def __init__(self, **kwargs):
+    def __init__(self, use_last_projection=False, **kwargs):
         super().__init__(**kwargs)
+        self.use_last_projection = use_last_projection
+
+    @classmethod
+    def from_dict_and_pretrained(cls, config_dict: dict, pretrained_name: str):
+        """
+        Load the configuration from HuggingFace pretrained model,
+        and add or override the configuration with the given dictionary.
+        """
+        # Load base pretrained config
+        config = AutoConfig.from_pretrained(pretrained_name).to_dict()
+        # override the configuration with the given dictionary
+        config.update(config_dict)
+        return cls(**config)
 
 
 class AlexVisionProjectionConfig(PretrainedConfig):
@@ -37,7 +50,12 @@ class AlexVisionProjectionConfig(PretrainedConfig):
         emb_dim (int): Dimension of the output embeddings. The output tensor will have the shape
             (batch_size, n_frames, tokens_per_frame, emb_dim).
     """
-    def __init__(self, projection_type: str, input_dim: int, emb_dim: int):
+    def __init__(
+            self, 
+            projection_type: str,
+            input_dim: int, 
+            emb_dim: int
+        ):
         self.projection_type = projection_type
         self.input_dim = input_dim
         self.emb_dim = emb_dim
@@ -50,33 +68,19 @@ class AlexConfig(OPTConfig):
     Args (unique to AlexConfig):
 
     """
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-
-    def add_config(
-            self, 
-            vision_config: AlexVisionConfig,
-            vision_projection_config: AlexVisionProjectionConfig,
-            frame_emb_token_id: int,
-            frame_end_token_id: int,
-            action_dim: int = 22,  # TODO: Check this value
+    def __init__(
+            self,
+            vision_config: AlexVisionConfig = None,
+            vision_projection_config: AlexVisionProjectionConfig = None,
+            frame_emb_token_id: int = None,
+            frame_end_token_id: int = None,
+            action_dim: int = 22,
             binary_action_dims: List[int] = None,
             analogue_action_dims: List[int] = None,
-            timestamp_embedding: str = 'time2vec'
-            ) -> None:
-        """
-        Add configuration information for the Alex model.
-
-        Args:
-        vision_config (AlexVisionConfig): Configuration for the vision encoder module.
-        vision_projection_config (AlexVisionProjectionConfig): Configuration for the vision projection module.
-        frame_emb_token_id (int): Token ID for the video frame embedding.
-        frame_end_token_id (int): Token ID for the end of the video frame embedding.
-        action_dim (int): Dimension of the action prediction.
-        binary_action_dims (List[int]): List of indices of the binary action dimensions.
-        analogue_action_dims (List[int]): List of indices of the analogue action dimensions.
-        timestamp_embedding (str): Type of the timestamp embedding. Default is 'time2vec'.  
-        """
+            timestamp_embedding: str = 'time2vec',
+            **kwargs
+        ):
+        super().__init__(**kwargs)
         self.vision_config = vision_config
         self.vision_projection_config = vision_projection_config
         self.frame_emb_token_id = frame_emb_token_id
@@ -85,6 +89,25 @@ class AlexConfig(OPTConfig):
         self.binary_action_dims = binary_action_dims
         self.analogue_action_dims = analogue_action_dims
         self.timestamp_embedding = timestamp_embedding
+
+    def from_dict_and_pretrained(
+            cls, 
+            config_dict: dict,
+            vision_config: AlexVisionConfig,
+            vision_projection_config: AlexVisionProjectionConfig,
+            pretrained_name: str
+        ):
+        """
+        Load the language model configuration from HuggingFace pretrained model,
+        and add or override the configuration with the given dictionary.
+        """
+        config = AutoConfig.from_pretrained(pretrained_name).to_dict()
+        config.update(config_dict)
+        return cls(
+            vision_config=vision_config,
+            vision_projection_config=vision_projection_config,
+            **config
+        )
 
 
 @dataclass

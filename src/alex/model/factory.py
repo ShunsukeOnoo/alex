@@ -10,7 +10,11 @@ from .processing_alex import AlexProcessor
 
 def load_model_and_preprocessor(config: Dict[str, Any]):
     """
-    Load model and preprocessor from the config for training the model.
+    Load model and preprocessor from the config for training the model
+    based on the HuggingFace weights.
+
+    When loading the weights you trained, don't use this function.
+    Instead just use AlexOPTForAction.from_pretrained(your_model_path).
 
     Contents of the config:
         - pretrain_name: The name of the pre-trained model for the langauge model.
@@ -18,8 +22,8 @@ def load_model_and_preprocessor(config: Dict[str, Any]):
         - preprocessor: The configuration for the preprocessor.
         - model: The configuration for the model.
     """
-    pretrain_name = config['pretrain_name']
-    vision_pretrain_name = config['vision_pretrain_name']
+    pretrain_name = config['pretrain_name']                 # language model
+    vision_pretrain_name = config['vision_pretrain_name']   # vision model
 
     # load preprocessor first
     tokenizer = AutoTokenizer.from_pretrained(pretrain_name)
@@ -35,16 +39,15 @@ def load_model_and_preprocessor(config: Dict[str, Any]):
     )
     
     # prepare config for the model
-    vision_config = AlexVisionConfig.from_pretrained(vision_pretrain_name)
-    vision_projection_config = AlexVisionProjectionConfig(**config['vision_projection'])
-
-    alex_config = AlexConfig.from_pretrained(pretrain_name)
-    alex_config.add_config(
+    projection_config = AlexVisionProjectionConfig(**config['vision_projection'])
+    vision_config = AlexVisionConfig.from_dict_and_pretrained(
+        config['vision'], pretrained_name=vision_pretrain_name
+    )
+    alex_config = AlexConfig.from_dict_and_pretrained(
+        config['model'],
         vision_config=vision_config,
-        frame_token_id=processor.frame_token_id,
-        frame_end_token_id=processor.frame_end_token_id,
-        vision_projection_config=vision_projection_config,
-        **config['model']
+        vision_projection_config=projection_config,
+        pretrained_name=pretrain_name
     )
 
     # instantiate the model and load weights for the language model

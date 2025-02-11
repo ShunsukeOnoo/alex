@@ -14,18 +14,26 @@ training:
   output_dir: ./output/
   report_to: "wandb"
 
+# model
 pretrain_name: facebook/opt-125m
-vision_pretrain_name: openai/clip-vit-base-patch32
 model:
   binary_action_dims:  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
   analogue_action_dims: [20, 21]  # camera_0, camera_1
 
+# vision
+vision_pretrain_name: openai/clip-vit-base-patch32
+vision:
+  use_last_projection: True
 
+# vision projection
 vision_projection:
   projection_type: 'linear'
+
+  # match them to the hidden dimension of the vision model and the language model
   input_dim: 512
   emb_dim: 768
 
+# processor
 preprocessor:
   frame_emb_len: 1
 

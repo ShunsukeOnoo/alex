@@ -42,6 +42,7 @@ class AlexProcessor:
         frame_emb_len (int): Length of the frame embeddings.
             The overall placeholder for a single frame will be frame_token * (frame_emb_len - 1) + frame_end_token.
         default_fps (int): Default frame per second for the video clips. Used when frame_timestamps is not provided.
+        pad_value (float): Value to pad the sequences other than input_ids.
     """
     def __init__(self, 
                  tokenizer: PreTrainedTokenizer, 
@@ -50,7 +51,8 @@ class AlexProcessor:
                  frame_emb_token: str = "<frame>", 
                  frame_end_token: str = "</frame>",
                  frame_emb_len: int = 1,
-                 default_fps: int = 30
+                 default_fps: int = 30,
+                 return_labels: bool = True,
                  ):
         self.tokenizer = tokenizer
         self.image_processor = image_processor
@@ -59,9 +61,7 @@ class AlexProcessor:
         self.frame_end_token = frame_end_token
         self.frame_emb_len = frame_emb_len
         self.default_fps = default_fps
-
-        # id: int, token: str
-        self.pad_token_id = tokenizer.pad_token_id
+        self.return_labels = return_labels
 
         assert frame_emb_token != '', "frame_token must not be an empty string."
         assert frame_end_token != '', "frame_end_token must not be an empty string."
@@ -80,178 +80,59 @@ class AlexProcessor:
         self.frame_tokens = frame_start_token + frame_emb_token * frame_emb_len + frame_end_token
         self.frame_token_ids = tokenizer.encode(self.frame_tokens, add_special_tokens=False)  # List[int]
         self.frame_token_len = len(self.frame_token_ids)  # length of total special tokens per frame TODO: Name is confusing.
-        
-
-    def collate_fn(
-            self,
-            batch
-    ):
-        """
-        Collate function for transformers Trainer class.
-        Apply preprocessing and padding to the input samples.
-
-        Args:
-            batch: List of samples to collate.
-        """
-        return self.__call__(
-            video_frames=[sample['video_frames'] for sample in batch],
-            frame_timestamps=[sample['frame_timestamps'] for sample in batch],
-            text=[sample['text'] for sample in batch],
-            text_timestamps=[sample['text_timestamps'] for sample in batch],
-            actions=[sample['actions'] for sample in batch],
-        )
     
     def __call__(
             self,
-            video_frames: Union[List[torch.Tensor], torch.Tensor],
-            frame_timestamps: List[List[float]],
-            text: List[List[str]],
-            text_timestamps: List[List[Tuple[float, float]]],
-            actions: List[List[dict]] = None,
-            padding: Union[bool, str] = True,
-            padding_side: str = "right",
-            max_length: Optional[int] = None
+            video_frames: torch.Tensor,
+            frame_timestamps,
+            text: list[str],
+            text_timestamps: list[tuple[float, float]],
+            actions: list[dict] = None,
+            return_labels: bool = None,
+            unsqueeze: bool = False
         ):
         """
-        Process input samples and make a batch. 
-
-        TODO: this method is not compatible with a single input sample.
+        Process and input sample and return input to the model.
+        Can be used as transform for the YouTubeDataset. 
 
         Args:
-            video_frames (List[torch.Tensor]): List of video frames for each video clip.
-                Each element is video frames in a video clip with shape (n_frames, num_channel, height, width).
-            frame_timestamps (List[List[float]]): List of timestamps for each video frame.
-                Each element is a list of timestamps for each video clip.
-            text (List[List[str]]): List of transcripts of the video clips.
-                Each element is a list of strings, each represent a chunk of trunscript.
-            text_timestamps (List[List[Tuple[float, float]]]): List of timestamps for each text chunk.
-                Each element is a list of tuples of start and end timestamps.
-            actions (List[List[dict]]): (optional) Training targets. List of actions that corresponds to each video frame.
-            padding (Union[bool, str]): Padding strategy for input_ids. Can be one of the following:
-                - True: Pad to the maximum length in the batch.
-                - "longest": Pad to the longest sequence in the batch.
-                - "max_length": Pad to the maximum length in the batch.
-                - False: No padding.
-            padding_side (str): The side on which to pad the sequence. Can be selected between ['right', 'left'].
-            max_length (Optional[int]): Maximum length of the returned list and optionally padding length.
+            video_frames (torch.Tensor): Video frames for the video clip. (n_frame, num_channel, height, width) with range [0, 1].
+            frame_timestamps (Union[list[float], torch.tensor]): Timestamps for video frames in seconds.
+            text (list[str]): Transcripts of the video clip.
+            text_timestamps (list[tuple[float, float]]): The start time and end time of each transcript.
+            actions (list[dict]): (optional) Training targets. List of actions that corresponds to each video frame.
+            return_labels (bool): Whether or not to return the labels for input_ids. Overrides the default value.\
+            unsqueeze (bool): Whether to unsqueeze the tensors to make them batched.
 
         Returns:
-
+            dict: Dictionary that contains the following keys:
+                video_frames (torch.Tensor): Preprocessed video frames with shape (1, n_frames, num_channel, height, width).
+                timestamps (torch.Tensor): Timestamps for each tokens. Shape (1, n_tokens).
+                input_ids (torch.Tensor): Token ids that contians the video frame placeholders. Shape (1, n_tokens).
+                actions (torch.Tensor): (Optional) Preprocessed actions that corresponds to each video frames.
+                    (1, n_frames, action_dim).
+                labels (torch.Tensor): (Optional) Labels for input_ids. Shape (1, n_tokens-1)
         """
-        # check if inputs are batched or a single sample
-        if isinstance(video_frames, torch.Tensor) and video_frames.dim() == 4:
-            # a single sample
-            processed = self.process_sample(
-                video_frames=video_frames,
-                frame_timestamps=frame_timestamps,
-                text=text,
-                text_timestamps=text_timestamps,
-                actions=actions
-            )
-            processed = [processed]
+        # process the sample
+        inputs = self.process_sample(
+            video_frames=video_frames,
+            frame_timestamps=frame_timestamps,
+            text=text,
+            text_timestamps=text_timestamps,
+            actions=actions
+        )
 
-        else:
-            # Process each sample
-            processed = [
-                self.process_sample(
-                    video_frames=video_frames[i],
-                    frame_timestamps=frame_timestamps[i],
-                    text=text[i],
-                    text_timestamps=text_timestamps[i],
-                    actions=actions[i] if actions is not None else None
-                )
-                for i in range(len(video_frames))
-            ]
+        if unsqueeze:
+            # unsqueeze the tensors to make them batched
+            inputs = {k: v.unsqueeze(0) for k, v in inputs.items()}
 
-        # stack all items into a list
-        input_ids = [data['input_ids'] for data in processed]    # List[List[int]]
-        timestamps = [data['timestamps'] for data in processed]  # List[List[float]]
-        video_frames = [data['video_frames'] for data in processed] # list of tensors with shape (n_frames, num_channel, height, width)
-        if actions is not None:
-            actions = [data['actions'] for data in processed]
-        
-        if padding:
-            # pad input_ids and timestamps: note input_ids and timestamps from a same sample have same length
-            max_input_len = max(len(ids) for ids in input_ids)
-            pad_length = max_length if max_length is not None else max_input_len
-            input_ids, attention_mask = self.pad(input_ids, pad_length, padding_side=padding_side, pad_value=self.pad_token_id, return_attention_mask=True)
-            timestamps = self.pad(timestamps, pad_length, pad_value=0, padding_side=padding_side)
+        # return the labels if needed
+        return_labels = self.return_labels if return_labels is None else return_labels
+        if return_labels:
+            inputs['labels'] = inputs['input_ids'][:, 1:].clone()
 
-            # pad video_frames and actions
-            max_frame_len = max(vf.size(0) for vf in video_frames)
-            video_frames = self.pad(video_frames, max_frame_len, pad_value=0, padding_side=padding_side)
-            if actions is not None:
-                actions = self.pad(actions, max_frame_len, pad_value=0, padding_side=padding_side)
-
-        # stack all items into tensors
-        batch = {
-            'video_frames': torch.stack(video_frames),
-            'timestamps': torch.tensor(timestamps),
-            'input_ids': torch.tensor(input_ids),
-            'attention_mask': torch.tensor(attention_mask) if padding else None,
-        }
-        if actions is not None:
-            batch['actions'] = torch.stack(actions)
-        return batch
+        return inputs
     
-    def pad(
-            self,
-            sequences: Union[List[List[Any]], List[torch.Tensor]],
-            pad_length: int,
-            pad_value: Union[int, float, torch.Tensor],
-            padding_side: str = "right",
-            return_attention_mask: bool = False
-    ):
-        """Pad sequences into the same length.
-
-        Args:
-            sequences: List of sequences to pad. If the sequences are torch.Tensor, pad first dimension.
-            pad_length: Length to pad the sequences.
-            pad_value: Value to pad the sequences.
-            padding_side: Side to pad the sequences. Can be 'right' or 'left'.
-            return_attention_mask: Whether to create attention mask.
-
-        Returns:
-            Union[List[List[Any]], List[torch.Tensor]]: Padded sequences.
-            List[List[int]]: Attention mask if return_attention_mask is True.
-        """
-        # create attention mask first
-        if return_attention_mask:
-            if padding_side == "right":
-                attention_mask = [[1] * len(seq) + [0] * (pad_length - len(seq)) for seq in sequences]
-            elif padding_side == "left":
-                attention_mask = [[0] * (pad_length - len(seq)) + [1] * len(seq) for seq in sequences]
-            else:
-                raise ValueError(f"padding_side must be one of ['right', 'left'], but got {padding_side}.")
-
-        if isinstance(sequences[0], list):
-            if padding_side == "right":
-                sequences = [seq + [pad_value] * (pad_length - len(seq)) for seq in sequences]
-            elif padding_side == "left":
-                sequences = [[pad_value] * (pad_length - len(seq)) + seq for seq in sequences]
-            else:
-                raise ValueError(f"padding_side must be one of ['right', 'left'], but got {padding_side}.")
-            
-        elif isinstance(sequences[0], torch.Tensor):
-            dim = sequences[0].dim()
-            if padding_side == "right":
-                sequences = [
-                    F.pad(seq, tuple([0] * (dim - 1) + [pad_length - len(seq)]), value=pad_value) for seq in sequences
-                ]
-            elif padding_side == "left":
-                sequences = [
-                    F.pad(seq, tuple([0] * (dim - 2) + [pad_length - len(seq)] + [0]), value=pad_value) for seq in sequences
-                ]
-            else:
-                raise ValueError(f"padding_side must be one of ['right', 'left'], but got {padding_side}.")
-        else:
-            raise ValueError(f"sequences must be a list of list or list of torch.Tensor. Got {type(sequences[0])}.")
-        
-        if return_attention_mask:
-            return sequences, attention_mask
-        else:
-            return sequences
-
     def process_sample(
             self,
             video_frames: torch.Tensor,
@@ -275,8 +156,8 @@ class AlexProcessor:
 
         Returns:
             dict: Dictionary that contains the following keys:
-                input_ids (List[int]): Token ids that contians the video frame placeholders. 
-                timestamps (List[int]): Timestamp for each tokens. Shape (n_tokens,).
+                input_ids (torch.Tensor): Token ids that contians the video frame placeholders. (n_tokens,)
+                timestamps (torch.Tensor): Timestamp for each tokens. Shape (n_tokens,).kkkkk
                 video_frames (torch.Tensor): Preprocessed video frames with shape (n_frames, num_channel, height, width).
                 actions (torch.Tensor): (Optional) Preprocessed actions that corresponds to
                     each video frames. Shape (n_frames, action_dim).
@@ -312,13 +193,13 @@ class AlexProcessor:
         if actions is not None:
             actions = action_dict_to_tensor(actions)
 
-        # 4. Return the results
         data = {
-            'input_ids': input_ids,
-            'timestamps': timestamps,
+            'input_ids': torch.tensor(input_ids),
+            'timestamps': torch.tensor(timestamps),
             'video_frames': video_frames,
-            'actions': actions,
         }
+        if actions is not None:
+            data['actions'] = action_dict_to_tensor(actions)
         return data
 
     # From transformer.models.kosmos2.processing_kosmos2.py
@@ -336,6 +217,146 @@ class AlexProcessor:
         the docstring of this method for more information.
         """
         return self.tokenizer.decode(*args, **kwargs)
+
+
+class PaddingCollator:
+    """
+    Pad the preprocessed input sequences into the same length.
+    Used as a collate_fn for HuggingFace Trainer.
+
+    Args:
+        padding (Union[bool, str]): Padding strategy for input_ids. Can be one of the following:
+            - True: Pad to the maximum length in the batch.
+            - "longest": Pad to the longest sequence in the batch.
+            - "max_length": Pad to the maximum length in the batch.
+            - False: No padding.
+        padding_side (str): The side on which to pad the sequence. Can be selected between ['right', 'left'].
+        max_length (Optional[int]): Maximum length of the returned list and optionally padding
+        pad_token_id (int): Token id for padding input_ids.
+        pad_value (float): Value to pad the sequences other than input_ids.
+        return_labels (bool): Whether to return the labels for input_ids.
+    """
+    def __init__(
+            self,
+            padding: Union[bool, str] = True,
+            padding_side: str = "right",
+            max_length: Optional[int] = None,
+            pad_token_id: int = 0,
+            pad_value: float = 0,
+            return_labels: bool = True
+    ):
+        self.padding = padding
+        self.padding_side = padding_side
+        self.max_length = max_length
+        self.pad_token_id = pad_token_id
+        self.pad_value = pad_value
+        self.return_labels = return_labels
+
+    def __call__(self, batch):
+        """
+        Pad sequences into a batch.
+        Pad input_ids and timestamps into a same length.
+        Pad video_frames and actions into the same length.
+
+        Args:
+            batch (List[Dict]): List of preprocessed input samples. Each sample contains the following:
+                input_ids (torch.Tensor): Token ids that contians the video frame placeholders. (n_tokens)
+                timestamps (torch.Tensor): Timestamp for each tokens. Shape (n_tokens)
+                video_frames (torch.Tensor): Preprocessed video frames with shape (n_frames, num_channel, height, width).
+                actions (torch.Tensor): (Optional) Preprocessed actions that corresponds to each video frames. Shape (n_frames, action_dim).
+        """
+        # get items from the batch
+        input_ids = [sample['input_ids'] for sample in batch]     # list[torch.Tensor]
+        timestamps = [sample['timestamps'] for sample in batch]   
+        video_frames = [sample['video_frames'] for sample in batch]
+        if 'actions' in batch[0]:
+            actions = [sample['actions'] for sample in batch]  
+        else:
+            actions = None
+
+        # pad input_ids and timestamps: note input_ids and timestamps from a same sample have same length
+        max_input_len = max(len(ids) for ids in input_ids)
+        pad_length = self.max_length if self.max_length is not None else max_input_len
+        input_ids, attention_mask = pad(input_ids, pad_length, padding_side=self.padding_side, pad_value=self.pad_token_id, return_attention_mask=True)
+        timestamps = pad(timestamps, pad_length, pad_value=self.pad_value, padding_side=self.padding_side)
+
+        # pad video_frames and actions
+        max_frame_len = max(vf.size(0) for vf in video_frames)
+        video_frames = pad(video_frames, max_frame_len, pad_value=self.pad_value, padding_side=self.padding_side)
+        if actions is not None:
+            actions = pad(actions, max_frame_len, pad_value=self.pad_value, padding_side=self.padding_side)
+
+        # stack all items into tensors
+        batch = {
+            'video_frames': torch.stack(video_frames),
+            'timestamps': torch.tensor(timestamps),
+            'input_ids': torch.tensor(input_ids),
+            'attention_mask': torch.tensor(attention_mask)
+        }
+        if actions is not None:
+            batch['actions'] = torch.stack(actions)
+        if self.return_labels:
+            batch['labels'] = batch['input_ids'][:, 1:].clone()
+        return batch
+
+
+def pad(sequences: Union[List[List[Any]], List[torch.Tensor]],
+        pad_length: int,
+        pad_value: Union[int, float, torch.Tensor],
+        padding_side: str = "right",
+        return_attention_mask: bool = False
+):
+    """Pad sequences into the same length.
+
+    Args:
+        sequences: List of batch sequences to pad. If the sequences are torch.Tensor, pad first dimension.
+        pad_length: Length to pad the sequences.
+        pad_value: Value to pad the sequences.
+        padding_side: Side to pad the sequences. Can be 'right' or 'left'.
+        return_attention_mask: Whether to create attention mask.
+
+    Returns:
+        Union[List[List[Any]], List[torch.Tensor]]: Padded sequences.
+        List[List[int]]: Attention mask if return_attention_mask is True.
+    """
+    assert isinstance(sequences, list), "sequences must be a list of sequences."
+
+    # create attention mask first
+    if return_attention_mask:
+        if padding_side == "right":
+            attention_mask = [[1] * len(seq) + [0] * (pad_length - len(seq)) for seq in sequences]
+        elif padding_side == "left":
+            attention_mask = [[0] * (pad_length - len(seq)) + [1] * len(seq) for seq in sequences]
+        else:
+            raise ValueError(f"padding_side must be one of ['right', 'left'], but got {padding_side}.")
+
+    if isinstance(sequences[0], list):
+        if padding_side == "right":
+            sequences = [seq + [pad_value] * (pad_length - len(seq)) for seq in sequences]
+        elif padding_side == "left":
+            sequences = [[pad_value] * (pad_length - len(seq)) + seq for seq in sequences]
+        else:
+            raise ValueError(f"padding_side must be one of ['right', 'left'], but got {padding_side}.")
+        
+    elif isinstance(sequences[0], torch.Tensor):
+        dim = sequences[0].dim()
+        if padding_side == "right":
+            sequences = [
+                F.pad(seq, tuple([0] * (dim - 1) + [pad_length - len(seq)]), value=pad_value) for seq in sequences
+            ]
+        elif padding_side == "left":
+            sequences = [
+                F.pad(seq, tuple([0] * (dim - 2) + [pad_length - len(seq)] + [0]), value=pad_value) for seq in sequences
+            ]
+        else:
+            raise ValueError(f"padding_side must be one of ['right', 'left'], but got {padding_side}.")
+    else:
+        raise ValueError(f"sequences must be a list of list or list of torch.Tensor. Got {type(sequences[0])}.")
+    
+    if return_attention_mask:
+        return sequences, attention_mask
+    else:
+        return sequences
 
 
 def expand_text_timestamps(

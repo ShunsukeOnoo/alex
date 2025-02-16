@@ -1,8 +1,8 @@
 training:
   per_device_train_batch_size: 1
   gradient_accumulation_steps: 1
-  num_train_epochs: 10
-  dataloader_num_workers: 2
+  num_train_epochs: 1000
+  dataloader_num_workers: 1
   fp16: true
   optim: "adamw_torch"
   learning_rate: 0.001
@@ -45,7 +45,7 @@ dataset:
 
 # specify the preprocessed data directory
 # if preprocess the data before training.
-preprocessed_data_dir: data/dataset/tutorial_filtered_xs_v0/preprocessed_data
+preprocessed_data_dir: data/dataset/tutorial_filtered_xs_v0/preprocessed_data_one_sample
 
 max_length: 200  # TODO: Combine this with dataset field
 

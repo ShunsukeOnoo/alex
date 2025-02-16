@@ -8,6 +8,26 @@ from .modeling_alex_opt import AlexOPTForAction, AlexConfig, AlexVisionConfig, A
 from .processing_alex import AlexProcessor
 
 
+def load_preprocessor(config: dict):
+    """
+    Load preprocessor from the config for training the model.
+    """
+    pretrain_name = config['pretrain_name']
+    # load preprocessor first
+    tokenizer = AutoTokenizer.from_pretrained(pretrain_name)
+    # TODO: These values only work for CLIP. Make it more general
+    vision_processor = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.Normalize(mean=[0.48145466, 0.4578275, 0.40821073], std=[0.26862954, 0.26130258, 0.27577711]),
+    ])
+    processor = AlexProcessor(
+        tokenizer=tokenizer, 
+        image_processor=vision_processor,
+        **config['preprocessor']
+    )
+    return processor
+
+
 def load_model_and_preprocessor(config: Dict[str, Any]):
     """
     Load model and preprocessor from the config for training the model
@@ -22,21 +42,12 @@ def load_model_and_preprocessor(config: Dict[str, Any]):
         - preprocessor: The configuration for the preprocessor.
         - model: The configuration for the model.
     """
+    # load preprocessor
+    processor = load_preprocessor(config)
+
+    # name for the pre-trained models
     pretrain_name = config['pretrain_name']                 # language model
     vision_pretrain_name = config['vision_pretrain_name']   # vision model
-
-    # load preprocessor first
-    tokenizer = AutoTokenizer.from_pretrained(pretrain_name)
-    # TODO: These values only work for CLIP. Make it more general
-    vision_processor = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.Normalize(mean=[0.48145466, 0.4578275, 0.40821073], std=[0.26862954, 0.26130258, 0.27577711]),
-    ])
-    processor = AlexProcessor(
-        tokenizer=tokenizer, 
-        image_processor=vision_processor,
-        **config['preprocessor']
-    )
 
     # token info for the model
     config['model']['frame_emb_token_id'] = processor.frame_emb_token_id

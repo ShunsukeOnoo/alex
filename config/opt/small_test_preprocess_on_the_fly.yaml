@@ -45,12 +45,12 @@ dataset:
 
 # specify the preprocessed data directory
 # if preprocess the data before training.
-preprocessed_data_dir: data/dataset/tutorial_filtered_xs_v0/preprocessed_data
+#preprocessed_data_dir: data/dataset/tutorial_filtered_xs_v0/preprocessed_data
 
 max_length: 200  # TODO: Combine this with dataset field
 
 wandb:
   project: "AlexOPT"
-  name: "small_test"
+  name: "small_test_preprocess_on_the_fly"
 
 freeze_vision: False

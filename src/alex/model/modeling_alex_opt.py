@@ -507,7 +507,7 @@ class AlexOPTForAction(OPTForCausalLM, OPTPreTrainedModel):
             use_cache: Optional[bool] = None,
             output_attentions: Optional[bool] = None,
             output_hidden_states: Optional[bool] = None,
-            return_dict: Optional[bool] = None
+            return_dict: Optional[bool] = True
     ) -> Union[Tuple, AlexModelOutput]:
         """Forward pass of the model.
     

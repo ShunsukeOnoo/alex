@@ -20,6 +20,25 @@ from torch.utils.data import Dataset
 import cv2
 
 
+class PreprocessedDataset(Dataset):
+    """
+    Dataset class for loading preprocessed samples.
+
+    Args:
+        preprocessed_data_dir (str): Path to the directory containing the preprocessed .pt files.
+    """
+    def __init__(self, data_dir):
+        self.data_dir = data_dir
+        self.sample_files = sorted(os.listdir(data_dir))  # Ensure order is maintained
+
+    def __len__(self):
+        return len(self.sample_files)
+
+    def __getitem__(self, idx):
+        sample_path = os.path.join(self.data_dir, self.sample_files[idx])
+        return torch.load(sample_path)  # Load and return the preprocessed sample
+
+
 class YouTubeDataset(Dataset):
     """
     Dataset class for youtube video clips.

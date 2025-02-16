@@ -30,14 +30,17 @@ TODO:
 """
 import os
 import json
+import warnings
+
+import wandb
 import yaml
 import fire
 import torch
 import deepspeed
-from transformers import TrainingArguments, Trainer
+from transformers import TrainingArguments, Trainer, TrainerCallback
 from alex.model.factory import load_model_and_preprocessor
 from alex.model.processing_alex import PaddingCollator
-from alex.dataset.dataset import YouTubeDataset
+from alex.dataset.dataset import YouTubeDataset, PreprocessedDataset
 
 
 def set_trainable_parameters(model, freeze_vision: bool):
@@ -53,29 +56,57 @@ def set_trainable_parameters(model, freeze_vision: bool):
             param.requires_grad = False
 
 
+class LossLoggingTrainer(Trainer):
+    """
+    Trainer class that reports the action_loss and lm_loss to wandb.
+
+    TODO: This implementation relies on return_dict=True in the model.
+    """
+    def compute_loss(self, model, inputs, return_outputs=False):
+        outputs = model(**inputs)
+        
+        # Extract losses
+        loss = outputs["loss"]
+        action_loss = outputs["action_loss"]
+        lm_loss = outputs["lm_loss"]
+
+        # Log additional losses using self.log() to sync with Trainer's logging
+        self.log({"action_loss": action_loss.item(), "lm_loss": lm_loss.item()})
+
+        return (loss, outputs) if return_outputs else loss
+
+
 def main(config_path: str):
     with open(config_path) as f:
         config = yaml.safe_load(f)
 
-    # wandb
-    if 'wandb' in config:
-        import wandb
-        wandb.init(**config['wandb'])
+    # trainer handles the wandb.init. instead set environment variables
+    os.environ["WANDB_PROJECT"] = config['wandb']['project']
+    os.environ['WANDB_RUN_NAME'] = config['wandb']['name']
 
     deepspeed.init_distributed()
 
     model, processor = load_model_and_preprocessor(config)
-    dataset = YouTubeDataset(transform=processor, **config['dataset'])
+
+    if 'preprocessed_data_dir' in config:
+        # use preprocessed data
+        # make sure the processor is compatible with the model
+        warnings.warn("Using preprocessed data. Make sure the processor is compatible with the model.")
+        dataset = PreprocessedDataset(config['preprocessed_data_dir'])
+    else:
+        # use raw data and preprocess on the fly
+        dataset = YouTubeDataset(transform=processor, **config['dataset'])
+    
     collator = PaddingCollator(
         max_length=config['max_length'], 
         pad_token_id=processor.tokenizer.pad_token_id, 
     )
 
     set_trainable_parameters(model, config['freeze_vision'])    
-    trainer = Trainer(
+    trainer = LossLoggingTrainer(
         model=model, train_dataset=dataset,
         args=TrainingArguments(**config["training"]),
-        data_collator=collator
+        data_collator=collator,
     )
     result = trainer.train()
 

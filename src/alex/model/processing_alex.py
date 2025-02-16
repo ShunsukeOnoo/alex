@@ -52,7 +52,7 @@ class AlexProcessor:
                  frame_end_token: str = "</frame>",
                  frame_emb_len: int = 1,
                  default_fps: int = 30,
-                 return_labels: bool = True,
+                 return_labels: bool = False,
                  ):
         self.tokenizer = tokenizer
         self.image_processor = image_processor

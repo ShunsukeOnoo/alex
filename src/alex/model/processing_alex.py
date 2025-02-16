@@ -122,15 +122,15 @@ class AlexProcessor:
             actions=actions
         )
 
-        if unsqueeze:
-            # unsqueeze the tensors to make them batched
-            inputs = {k: v.unsqueeze(0) for k, v in inputs.items()}
-
         # return the labels if needed
         return_labels = self.return_labels if return_labels is None else return_labels
         if return_labels:
-            inputs['labels'] = inputs['input_ids'][:, 1:].clone()
+            inputs['labels'] = inputs['input_ids'][1:].clone()
 
+        # unsqueeze the tensors if needed
+        if unsqueeze:
+            # unsqueeze the tensors to make them batched
+            inputs = {k: v.unsqueeze(0) for k, v in inputs.items()}
         return inputs
     
     def process_sample(
@@ -167,12 +167,17 @@ class AlexProcessor:
         video_frames = self.image_processor(video_frames)
 
         # Tokenize the input text and combine them with the video frame placeholders.
-        text_ids = self.tokenizer(text, return_tensors=None, add_special_tokens=False)['input_ids']  
-        # 2D list (n_chunk, n_tokens_per_chunk)
-        
-        # Add timestamps for all text tokens
-        text_timestamps = expand_text_timestamps(text_timestamps, text_ids)
-        text_ids = sum(text_ids, [])  # List[int]
+        if len(text) > 0:
+            text_ids = self.tokenizer(text, return_tensors=None, add_special_tokens=False)['input_ids']  
+            # 2D list (n_chunk, n_tokens_per_chunk)
+            
+            # Add timestamps for all text tokens
+            text_timestamps = expand_text_timestamps(text_timestamps, text_ids)
+            text_ids = sum(text_ids, [])  # List[int]
+        else:
+            # avoid calling tokenizer with empty list, which will raise an IndexError
+            text_ids = []
+            text_timestamps = []
 
         # Make a sequence of video frame placeholders and expand frame_timestamps accordingly.
         n_frames = len(video_frames)
@@ -188,10 +193,6 @@ class AlexProcessor:
         input_ids, timestamps = zip(*all_id_timestamps)
         input_ids = list(input_ids)
         timestamps = list(timestamps)
-
-        # Preprocess the actions.
-        if actions is not None:
-            actions = action_dict_to_tensor(actions)
 
         data = {
             'input_ids': torch.tensor(input_ids),
@@ -222,6 +223,7 @@ class AlexProcessor:
 class PaddingCollator:
     """
     Pad the preprocessed input sequences into the same length.
+    Also creates the labels for the causal language model.
     Used as a collate_fn for HuggingFace Trainer.
 
     Args:
@@ -274,6 +276,9 @@ class PaddingCollator:
         else:
             actions = None
 
+        # check shape
+        assert all(ids.dim() == 1 for ids in input_ids), "input_ids must have 1 dimension."
+
         # pad input_ids and timestamps: note input_ids and timestamps from a same sample have same length
         max_input_len = max(len(ids) for ids in input_ids)
         pad_length = self.max_length if self.max_length is not None else max_input_len
@@ -281,17 +286,19 @@ class PaddingCollator:
         timestamps = pad(timestamps, pad_length, pad_value=self.pad_value, padding_side=self.padding_side)
 
         # pad video_frames and actions
+        # note that video frames are always smaller than input_ids
         max_frame_len = max(vf.size(0) for vf in video_frames)
-        video_frames = pad(video_frames, max_frame_len, pad_value=self.pad_value, padding_side=self.padding_side)
+        pad_length = self.max_length if self.max_length is not None else max_frame_len
+        video_frames = pad(video_frames, pad_length, pad_value=self.pad_value, padding_side=self.padding_side)
         if actions is not None:
-            actions = pad(actions, max_frame_len, pad_value=self.pad_value, padding_side=self.padding_side)
+            actions = pad(actions, pad_length, pad_value=self.pad_value, padding_side=self.padding_side)
 
         # stack all items into tensors
         batch = {
             'video_frames': torch.stack(video_frames),
-            'timestamps': torch.tensor(timestamps),
-            'input_ids': torch.tensor(input_ids),
-            'attention_mask': torch.tensor(attention_mask)
+            'timestamps': torch.stack(timestamps),
+            'input_ids': torch.stack(input_ids),
+            'attention_mask': torch.tensor(attention_mask)  # list[list[int]] -> torch.Tensor
         }
         if actions is not None:
             batch['actions'] = torch.stack(actions)
@@ -324,9 +331,13 @@ def pad(sequences: Union[List[List[Any]], List[torch.Tensor]],
     # create attention mask first
     if return_attention_mask:
         if padding_side == "right":
-            attention_mask = [[1] * len(seq) + [0] * (pad_length - len(seq)) for seq in sequences]
+            attention_mask = [
+                [1] * min(len(seq), pad_length) + [0] * max(pad_length - len(seq), 0) for seq in sequences
+            ]
         elif padding_side == "left":
-            attention_mask = [[0] * (pad_length - len(seq)) + [1] * len(seq) for seq in sequences]
+            attention_mask = [
+                [0] * max(pad_length - len(seq), 0) + [1] * min(len(seq), pad_length) for seq in sequences
+            ]
         else:
             raise ValueError(f"padding_side must be one of ['right', 'left'], but got {padding_side}.")
 
@@ -341,12 +352,16 @@ def pad(sequences: Union[List[List[Any]], List[torch.Tensor]],
     elif isinstance(sequences[0], torch.Tensor):
         dim = sequences[0].dim()
         if padding_side == "right":
+            # pad first dimension on right
+            # pad (0, 0, ...., 0, pad_length - len(seq))
             sequences = [
-                F.pad(seq, tuple([0] * (dim - 1) + [pad_length - len(seq)]), value=pad_value) for seq in sequences
+                F.pad(seq, tuple([0] * (2*dim - 1) + [pad_length - len(seq)]), value=pad_value) for seq in sequences
             ]
         elif padding_side == "left":
+            # pad first dimension on left
+            # pad (0, 0, ...., pad_length - len(seq), 0)
             sequences = [
-                F.pad(seq, tuple([0] * (dim - 2) + [pad_length - len(seq)] + [0]), value=pad_value) for seq in sequences
+                F.pad(seq, tuple([0] * (2*dim - 2) + [pad_length - len(seq)] + [0]), value=pad_value) for seq in sequences
             ]
         else:
             raise ValueError(f"padding_side must be one of ['right', 'left'], but got {padding_side}.")

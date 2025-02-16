@@ -90,6 +90,7 @@ class AlexConfig(OPTConfig):
         self.analogue_action_dims = analogue_action_dims
         self.timestamp_embedding = timestamp_embedding
 
+    @classmethod
     def from_dict_and_pretrained(
             cls, 
             config_dict: dict,

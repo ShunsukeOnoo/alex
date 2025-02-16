@@ -99,7 +99,7 @@ class YouTubeDataset(Dataset):
         }
 
         if self.transform:
-            data = self.transform(data)
+            data = self.transform(**data)
         return data
 
 

@@ -28,15 +28,15 @@ TODO:
 - Add LoRA
 - Assign learning rate for each modules
 """
-from typing import Any, Dict, List, Tuple, Union
 import os
-
+import json
 import yaml
 import fire
 import torch
 import deepspeed
 from transformers import TrainingArguments, Trainer
 from alex.model.factory import load_model_and_preprocessor
+from alex.model.processing_alex import PaddingCollator
 from alex.dataset.dataset import YouTubeDataset
 
 
@@ -57,21 +57,33 @@ def main(config_path: str):
     with open(config_path) as f:
         config = yaml.safe_load(f)
 
+    # wandb
+    if 'wandb' in config:
+        import wandb
+        wandb.init(**config['wandb'])
+
     deepspeed.init_distributed()
 
     model, processor = load_model_and_preprocessor(config)
     dataset = YouTubeDataset(transform=processor, **config['dataset'])
+    collator = PaddingCollator(
+        max_length=config['max_length'], 
+        pad_token_id=processor.tokenizer.pad_token_id, 
+    )
 
     set_trainable_parameters(model, config['freeze_vision'])    
     trainer = Trainer(
         model=model, train_dataset=dataset,
         args=TrainingArguments(**config["training"]),
-        collate_fn=processor.collate_fn
+        data_collator=collator
     )
     result = trainer.train()
 
+    # is this correct way to save the model?
     save_path = os.path.join(config['training']['output_dir'], 'final_checkpoint')
     trainer.save_model(save_path)
+
+    # also save the tokenizer and processor
 
 if __name__ == "__main__":
     fire.Fire(main)

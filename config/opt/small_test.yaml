@@ -1,16 +1,16 @@
 training:
-  per_device_train_batch_size: 2
+  per_device_train_batch_size: 1
   gradient_accumulation_steps: 4
-  num_train_epochs: 1
+  num_train_epochs: 100
   dataloader_num_workers: 16
   fp16: true
   optim: "adamw_torch"
-  learning_rate: 5.0e-5
+  learning_rate: 0.001
   logging_steps: 100
   save_strategy: "steps"
   save_steps: 4000
   save_total_limit: 1
-  deepspeed: configs/deepspeed/ds_config_zero1.json
+  deepspeed: config/deepspeed/ds_config_zero1.json
   output_dir: ./output/
   report_to: "wandb"
 
@@ -30,7 +30,7 @@ vision_projection:
   projection_type: 'linear'
 
   # match them to the hidden dimension of the vision model and the language model
-  input_dim: 512
+  input_dim: 768
   emb_dim: 768
 
 # processor
@@ -43,7 +43,10 @@ dataset:
   video_dir: data/youtube_videos/tutorial_filtered_xs_v0
   transcripts_dir: data/youtube_transcrips/tutorial_filtered_s_v0
 
+max_length: 200  # TODO: Combine this with dataset field
 
 wandb:
   project: "AlexOPT"
   name: "small_test"
+
+freeze_vision: False

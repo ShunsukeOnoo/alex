@@ -34,9 +34,13 @@ def load_model_and_preprocessor(config: Dict[str, Any]):
     ])
     processor = AlexProcessor(
         tokenizer=tokenizer, 
-        vision_processor=vision_processor,
+        image_processor=vision_processor,
         **config['preprocessor']
     )
+
+    # token info for the model
+    config['model']['frame_emb_token_id'] = processor.frame_emb_token_id
+    config['model']['frame_end_token_id'] = processor.frame_end_token_id
     
     # prepare config for the model
     projection_config = AlexVisionProjectionConfig(**config['vision_projection'])
@@ -51,7 +55,10 @@ def load_model_and_preprocessor(config: Dict[str, Any]):
     )
 
     # instantiate the model and load weights for the language model
-    model = AlexOPTForAction.from_pretrained(pretrain_name, config=config)
+    model = AlexOPTForAction.from_pretrained(
+        pretrained_model_name_or_path=pretrain_name, 
+        config=alex_config
+    )
     # load weights for the vision model
     # This is double initialization but it is necessary to load the weights
     model.vision_model.model = CLIPVisionModel.from_pretrained(vision_pretrain_name)
